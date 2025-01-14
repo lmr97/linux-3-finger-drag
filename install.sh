@@ -1,9 +1,9 @@
 ###########################
-# linux-three-finger-drag #
+# linux-multi-finger-drag #
 #   Installation Script   #
 ###########################
 
-echo -n "Verifying prerequisites...             "
+echo -n "Verifying prerequisites...                                     "
 if [[ $(whoami) != "root" ]]; then
     echo -e "[\e[0;31m FAIL \e[0m]"
     echo -e "\n\e[0;31mFatal\e[0m: Root privileges are needed to install this program"
@@ -12,11 +12,11 @@ if [[ $(whoami) != "root" ]]; then
 fi
 
 # verify CWD is the repo folder
-if [[ ${PWD##*/} != "linux-three-finger-drag" ]]; then
+if [[ ${PWD##*/} != "linux-3-finger-drag" ]]; then
     echo -e "[\e[0;31m FAIL \e[0m]"
     echo -e "\n\e[0;31mFatal\e[0m: This script needs to be run from the repo directory"
-    echo "(linux-three-finger-drag) to run properly. Either return to that directory,"
-    echo "or, if you're already there, change the name back to linux-three-finger-drag."
+    echo "(linux-3-finger-drag) to run properly. Either return to that directory,"
+    echo "or, if you're already there, change the name back to linux-3-finger-drag."
     exit 1
 fi
 
@@ -26,7 +26,7 @@ echo -e "[\e[0;32m DONE \e[0m]"
 # 0. Check if libinput tools is installed
 # if the command isn't found, stdout will be null
 # (since output will be in stderr only, which we won't show)
-echo -n "Checking for libinput helper tools...  "
+echo -n "Checking for libinput helper tools...                          "
 if [[ -z "$(libinput --version 2> /dev/null)" ]]; then
     echo -e "[\e[0;31m FAIL \e[0m]"
     echo -e "\n\e[0;31mFatal\e[0m: libinput helper tools are not installed, and are "
@@ -41,26 +41,13 @@ fi
 # (1. repo already cloned, presumably)
 
 # 2. Disable 3-finger gestures in libinput-gestures
-echo -n "Updating libinput-gestures configs...  "
-if [[ -d /etc/libinput-gestures.conf ]]; then
-    sed -i.bak '' /etc/libinput-gestures.conf
-    echo "Previous configs saved in /etc/libinput-gestures.conf.bak"
-elif [[ -d ~/.config/libinput-gestures.conf ]]; then
-    sed -i.bak '' ~/.config/libinput-gestures.conf
-    echo "Previous configs saved in ~/.config/libinput-gestures.conf.bak"
-fi
+echo "How many fingers on the trackpad would you like to trigger a drag?"
+echo -n "(default 3): "
+read fingers
+
+echo -n "Updating config file...                                        "
+sed -i "2s/3/$fingers/" mfd-config.json
 echo -e "[\e[0;32m DONE \e[0m]"
-echo
-echo "The libinput-gestures' config file (if installed) has been updated to "
-echo "change 3-finger gestures to 4-finger gestures, to avoid gesture"
-echo "ambiguity for the system."
-echo
-echo "If there are any other services active that use 3-finger gestures,"
-echo "please adjust them to use 4 fingers instead (see installation step 2 in the README). "
-echo "This avoids ambiguity for your system's input."
-echo 
-echo -n "Press [Enter] when you have completed this."
-read
 
 
 # 3. Update permissions
@@ -73,10 +60,14 @@ cp ./60-uinput.rules /etc/udev/rules.d
 ## Not necessary on Ubuntu-based distros,
 ## But essential on Arch (and probably more minimal distros too), 
 ## and does no harm on other distros
+echo -n "Setting uinput modules to load at boot...                      "
 echo "uinput" > /etc/modules-load.d/uinput.conf
+echo -e "[\e[0;32m DONE \e[0m]"
 
 ## Add user to input group, so they can see libinput debug events
+echo -n "Adding you to input group...                                   "
 gpasswd --add $SUDO_USER input
+echo -e "[\e[0;32m DONE \e[0m]"
 
 
 # 4. Build with Cargo
@@ -84,17 +75,17 @@ cargo build --release
 
 
 # 6. Install to /usr/bin
-echo -n "Installing binary to /usr/bin...       "
-cp ./target/release/linux-3-finger-drag /usr/bin
+echo -n "Installing binary to /usr/bin...                               "
+cp ./target/release/linux-n-finger-drag /usr/bin
 echo -e "[\e[0;32m DONE \e[0m]"
 
 
 # 7. Set up config file
 # Has to be done as non-root user, so the file is accessible to the user
-echo -n "Installing config file...              "
+echo -n "Installing config file...                                      "
 su $SUDO_USER -c '\
-    mkdir -p ~/.config/linux-3-finger-drag; \
-    cp 3fd-config.json ~/.config/linux-3-finger-drag '
+    mkdir -p ~/.config/linux-n-finger-drag; \
+    cp 3fd-config.json ~/.config/linux-n-finger-drag '
 echo -e "[\e[0;32m DONE \e[0m]"
 
 
@@ -102,14 +93,14 @@ echo -e "[\e[0;32m DONE \e[0m]"
 
 # 8b. Installing SystemD service
 # If using SystemD as the init system
-echo -n "Installing/enabling SystemD service...          "
+echo -n "Installing/enabling SystemD service...                         "
 if [[ -n $(ps -p 1 | grep systemd) ]]; then
 
     # define user-level service
     su $SUDO_USER -c '\
         mkdir -p $HOME/.config/systemd/user; \
-        cp three-finger-drag.service $HOME/.config/systemd/user/; \
-        systemctl --user enable three-finger-drag.service '
+        cp multi-finger-drag.service $HOME/.config/systemd/user/; \
+        systemctl --user enable multi-finger-drag.service '
     echo -e "[\e[0;32m DONE \e[0m]"
 
 else
