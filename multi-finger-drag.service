@@ -1,5 +1,5 @@
 [Unit]
-Description=Three-finger drag gestures for Linux
+Description=Multi-finger drag gestures for Linux
 
 [Service]
 Type=exec
