@@ -1,5 +1,5 @@
 [package]
-name = "linux-3-finger-drag"
+name = "linux-n-finger-drag"
 version = "0.1.0"
 authors = ["Martin Reid <lmreid1997@gmail.com"]
 edition = "2021"

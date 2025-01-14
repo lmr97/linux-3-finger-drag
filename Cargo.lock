@@ -62,7 +62,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5aaeb2981e0606ca11d79718f8bb01164f1d6ed75080182d3abf017e6d244b6d"
 
 [[package]]
-name = "linux-3-finger-drag"
+name = "linux-n-finger-drag"
 version = "0.1.0"
 dependencies = [
  "input-linux",
