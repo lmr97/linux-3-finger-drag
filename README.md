@@ -3,12 +3,13 @@ This program builds off marsqing's [`libinput-three-finger-drag`](https://github
 
 ## Tested on...
 
-OS | Version | Desktop Enviroment | Supported
+OS | Version | Desktop Enviroment | Verified
 ---|---|---|---
 **Kubuntu** | 24.10 | KDE Plasma 6 | ✅ <sup>1</sup>
 **Pop_OS!** | (unknown) | COSMIC | ✅
 **Arch** | 2025-01-01 | GNOME | ✅
 **Gentoo** | 6.6.67 | KDE Plasma 6 | ✅
+**Fedora** | 42 | GNOME (v. 48) | ✅
 
 ---
 <sup>1</sup> Developed on this setup.
