@@ -115,7 +115,10 @@ fn main() {
                 parts.remove(2);
             }
             let finger = parts[3];
-            if finger != "3" && !action.starts_with("GESTURE_HOLD") {
+
+            // `finger != "2"` condition prevents sticking mouse on pinch actions.
+            // courtesy of Justtheflu on GitHub (issue #7)
+            if finger != "3" && finger != "2" && !action.starts_with("GESTURE_HOLD") {
                 // mouse_down
                 vtrackpad.mouse_down();
                 continue;
