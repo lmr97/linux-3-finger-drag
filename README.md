@@ -158,7 +158,7 @@ cp 3fd-config.json ~/.config/linux-3-finger-drag
 ```
 Now you can configure to your heart's content!
 
-### 8. Add program to Autostart (KDE)
+### 8. Add program to Autostart (KDE only)
 This is a part of the graphical interface. You can find the Autostart menu in System Settings > Autostart (near the bottom). Once there, click the "+ Add..." button in the upper right of the window, and select "Add Application" from the dropdown menu. Then, in text bar in the window that pops up, paste
 ```
 /usr/bin/linux-3-finger-drag
@@ -167,9 +167,9 @@ and click OK.
 
 Now select the program in the Autostart menu, and press Start in the upper right-hand corner of the window to start using it in the current session. It will automatically start in the next session you log into.
 
-### 8b. Add program to Autostart (systemd, works distro and desktop agnostic)
+### 8b. Add program to SystemD (works distro and desktop agnostic)
 
-Alternatively you can add this program to the autostart in any linux desktop and autostart it via systemd. To do this copy this file create the local systemd folder if not already created:
+Alternatively, you can add this program to the autostart in any linux desktop and autostart it via systemd. To do this copy this file create the local systemd folder if not already created:
 
 ```
 mkdir -p ~/.config/systemd/user
