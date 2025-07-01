@@ -1,5 +1,5 @@
 # Three Finger Drag for Wayland/KDE
-This program builds off marsqing's [`libinput-three-finger-drag`](https://github.com/marsqing/libinput-three-finger-drag), expanding it to support computers with touchpads running in Wayland sessions (notably KDE Plasma 6). It only depends on `libinbut` and `uinput`, so the program should run in any desktop environment that has `libinput` installed, reagrdless of whether it uses X or Wayland.
+This program provides three-finger-drag support computers with touchpads running in Wayland sessions (notably KDE Plasma 6). It only depends on `libinbut` and `uinput`, so the program should run in any desktop environment that has `libinput` installed, regardless of whether it uses X11 or Wayland.
 
 ## Tested on...
 
@@ -198,4 +198,4 @@ A reboot is required to update all the permissions needed for the program to run
 There is a JSON configuration file, assumed to be in `~/.config/linux-3-finger-drag/` called `3fd-config.json`, which is read into the program at startup. You can specify an acceleration value (`acceleration`), which will be multiplied with all 3-finger gesture movements. You can also specify the time (in milliseconds) that the mouse hold will persist for after you lift your fingers (to give you a moment to reposition your fingers), with `drag_end_delay`. It's entirely optional: if the file cannot be read for any reason, the program will simply warn the user that the file could not be read (with the reason), and default to an acceleration multiplier of 1 and a drag end delay value of 0. 
 
 ## How it works
-This program uses the regex parsing structure of marsqing's `libinput-three-finger-drag` to detect three-finger gestures, and translating them into write-calls to [`/dev/uinput`](https://www.kernel.org/doc/html/v4.12/input/uinput.html) via a virtual mouse. This flow of control bypasses the display server layer entirely, which ensures compatability with any desktop environment (at least with some modifications).
+This program uses Rust bindings for libinput to detect three-finger gestures, and translates them into write-calls to [`/dev/uinput`](https://www.kernel.org/doc/html/v4.12/input/uinput.html) via a virtual trackpad. This flow of control bypasses the display server layer entirely, which ensures compatability with any desktop environment (at least with some modifications).
