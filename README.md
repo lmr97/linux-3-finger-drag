@@ -39,33 +39,9 @@ sudo bash install.sh
 
 ## Manual installation
 
-### 0. Install `libinput` helper tools (you may have it already)
+### 0. Install `libinput` (you probably have it already)
 
-If you are using GNOME or KDE Plasma for your desktop environment, you already have `libinput` installed (it's a dependency of those environments). There is also a set of helper tools for `libinput` accessible from the command line that `linux-3-finger-drag` depends on, which may also be already installed. 
-
-Regardless, you can confirm whether you have these helper tools by running:
-```
-libinput --version
-```
-If you get a version number from this command, you can proceed to the next step.
-
-If it's not installed, you can install it with the following for common distributions:
-
-#### Debian/Ubuntu
-```
-sudo apt install libinput-tools
-```
-#### Fedora 22 or later
-```
-sudo dnf install libinput-utils
-```
-#### openSUSE
-```
-sudo zypper install libinput-tools
-```
-Other common distributions (e.g. Arch) include the helper tools in their `libinput` packages.
-
-For other distributions, see the [pkgs.org site for `libinput-tools`](https://pkgs.org/download/libinput-tools) and [`libinput-utils`](https://pkgs.org/download/libinput-utils). 
+If you are using GNOME, KDE Plasma, or an Xorg-based desktop environment, you already have `libinput`'s dev package installed (it's a dependency of those environments). To make sure, you check with your package manager to check whether you have `libinput-dev` or `libinput-devel` installed (depending on the distro). It may also simply be included with the `libinput` package.
 
 
 ### 1. Clone the repository
