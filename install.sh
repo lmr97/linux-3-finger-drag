@@ -108,7 +108,7 @@ echo
 #
 # This isn't preferred (unless you trust my program), but it will solve the issue.
 echo -n "Installing binary to /usr/bin...                "
-cp ./target/release/linux-3-finger-drag /usr/bin
+cp ./target/release/linux-3-finger-drag /usr/bin/
 echo -e "[\e[0;32m DONE \e[0m]"
 
 
@@ -158,7 +158,7 @@ read answer
 case "$answer" in 
     y | "")
         echo "Okay! Rebooting now..."
-        #reboot
+        reboot
     ;;
     n)
         echo "Not rebooting. The program will start working after the next boot."
