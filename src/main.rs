@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use signal_hook::{self, consts::{SIGINT, SIGTERM}};
-use input::{Event, event::gesture::GestureEventTrait};
 
 mod virtual_trackpad;
 mod event_handler;
@@ -43,17 +42,8 @@ fn main() -> Result<(), std::io::Error> {
         }
 
         for event in &mut real_trackpad {
-
-            match event {
-                Event::Gesture(gest_ev) => {
-
-                    // we don't care about gestures with other finger-counts
-                    if gest_ev.finger_count() != 3 {continue;}
-
-                    event_handler::translate_gesture(gest_ev, &mut vtrackpad, &configs);
-                }
-                _ => {}
-            };
+            
+            event_handler::translate_gesture(event, &mut vtrackpad, &configs);
         }
     }
 
