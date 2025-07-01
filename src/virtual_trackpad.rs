@@ -135,10 +135,28 @@ impl VirtualTrackpad
 
     pub fn mouse_move_relative(&self, x_rel: f64, y_rel:f64) {
         // RelativeEvent::new() can only take integers, 
-        // so some precision must be lost
+        // so some precision must be lost. But this needs to be done 
+        // without bias, since x_rel and y_rel can be negative:
+        // so we truncate the values down (floor()) if they are positive,
+        // and truncate them up (ceil()) if they are negative.
+        // That way, they are truncated toward 0 regardless.
+        // 
+        // Why does this matter? Because it prevents the effect of the 
+        // origin (from which relative motion is calculated) seeming to 
+        // drift up or down the trackpad instead of staying where the 
+        // three finger drag started.
 
-        let x_rel_int = x_rel.ceil() as i32;
-        let y_rel_int = y_rel.ceil() as i32;
+        let x_rel_int = if x_rel > 0.0 {
+            x_rel.floor() as i32
+        } else {
+            x_rel.ceil() as i32
+        };
+
+        let y_rel_int = if y_rel > 0.0 {
+            y_rel.floor() as i32
+        } else {
+            y_rel.ceil() as i32
+        };
 
         let events = [
             InputEvent::from(
