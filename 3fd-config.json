@@ -1,4 +1,5 @@
 {
     "acceleration": 1.0,
-    "drag_end_delay": 0
+    "dragEndDelay": 0,
+    "minMotion": 0.2
 }
