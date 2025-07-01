@@ -54,7 +54,7 @@ pub fn start_handler() -> VirtualTrackpad {
         product: 0x5678,  // iykyk
         version: 0,
     };
-    let device_name = b"Virtual trackpad (made by linux-three-finger-drag)";
+    let device_name = b"Virtual trackpad (created by linux-3-finger-drag)";
     uhandle.create(&input_id, device_name, 0, &[]).unwrap();
 
     // needed to let the system catch up
@@ -90,7 +90,8 @@ impl VirtualTrackpad
         self.mouse_is_down = true;
     }
 
-    pub fn mouse_up(&mut self) {    
+    pub fn mouse_up(&mut self) {   
+
         let events = [
             InputEvent::from(
                 KeyEvent::new(
@@ -105,6 +106,7 @@ impl VirtualTrackpad
                     0)
                 ).into_raw(),
         ];
+
         self.handle.write(&events).unwrap();
         self.mouse_is_down = false;
     }
@@ -131,7 +133,7 @@ impl VirtualTrackpad
         self.mouse_is_down = false;
     }
 
-    pub fn mouse_move_relative(&self, x_rel: f32, y_rel:f32) {
+    pub fn mouse_move_relative(&self, x_rel: f64, y_rel:f64) {
         // RelativeEvent::new() can only take integers, 
         // so some precision must be lost
 
