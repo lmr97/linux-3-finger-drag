@@ -52,8 +52,6 @@ cd linux-3-finger-drag
 
 ### 2. Change any existing 3-finger gestures to 4-finger gestures
 
-If you already like your existing 3-finger gestures, but still want a multi-finger drag, check out the [`n-finger-drag` branch](https://github.com/lmr97/linux-3-finger-drag/tree/n-finger-drag) of this repostory, where the number of fingers to trigger the drag is configurable. It's still experimental, so any feedback would be welcome!
-
 #### For GNOME users
 
 GNOME users will need to install the Window Gestures Shell Extension. Once installed, you'll be able to change the finger number for swipe gestures from your settings. You can get it from either the [GNOME Extensions website](https://extensions.gnome.org/extension/6343/window-gestures/) or the [GitHub repository](https://github.com/amarullz/windowgestures). Once installed, disable all three finger gestures. 
