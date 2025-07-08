@@ -6,10 +6,7 @@ This program provides three-finger-drag support computers with touchpads running
 OS | Version | Desktop Enviroment | Verified
 ---|---|---|---
 **Kubuntu** | 24.10 | KDE Plasma 6 | ✅ <sup>1</sup>
-**Pop_OS!** | (unknown) | COSMIC | ✅
-**Arch** | 2025-01-01 | GNOME | ✅
-**Gentoo** | 6.6.67 | KDE Plasma 6 | ✅
-**Fedora** | 42 | GNOME (v. 48) | ✅
+**Arch** | (kernel 6.15.4) | KDE | ✅
 
 ---
 <sup>1</sup> Developed on this setup.
@@ -39,9 +36,29 @@ sudo bash install.sh
 
 ## Manual installation
 
-### 0. Install `libinput` (you probably have it already)
+### 0. Install the `libinput` dev library (you probably have it already)
 
-If you are using GNOME, KDE Plasma, or an Xorg-based desktop environment, you already have `libinput`'s dev package installed (it's a dependency of those environments). To make sure, you check with your package manager to check whether you have `libinput-dev` or `libinput-devel` installed (depending on the distro). It may also simply be included with the `libinput` package.
+If you are using GNOME, KDE Plasma, or an Xorg-based desktop environment, you likely already have `libinput`'s dev package installed (it's a dependency of those environments). To make sure, try installing it. Here are the commands for some common distros:
+
+#### Debian-based
+```
+sudo apt install libinput-dev
+```
+
+#### Red Hat / Fedora
+```
+sudo dnf install libinput-devel
+```
+
+#### Arch
+```
+sudo pacman -S libinput-devel
+```
+
+#### openSUSE
+```
+sudo zypper install libinput-devel
+```
 
 
 ### 1. Clone the repository
