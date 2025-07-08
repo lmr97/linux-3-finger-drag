@@ -11,6 +11,78 @@ if [[ $(whoami) != "root" ]]; then
     exit 1
 fi
 
+# 0. Check if libinput dev library is installed
+
+# determine package manager
+SEARCH_CMD="uncommon"  # default
+
+declare -A searchCommand;
+searchCommand["debian"]="apt list -qq --installed libinput-dev"
+searchCommand["redhat"]="dnf list --installed libinput-devel"
+searchCommand["arch"]="pacman -Q --noconfirm libinput-devel"
+searchCommand["suse"]="zypper search --installed-only libinput-devel"
+
+# set all variables from the os-release file
+source /etc/os-release
+
+if   [[ -n $ID_LIKE ]]; then
+    SEARCH_CMD=${searchCommand[${ID_LIKE}]}
+elif [[ -n $ID ]]; then
+    SEARCH_CMD=${searchCommand[${ID}]}
+fi
+
+if [[ $SEARCH_CMD = "uncommon" || -z $SEARCH_CMD ]]; then
+    echo -e "[\e[0;31m FAIL \e[0m]"
+    echo -e "\nIt looks like you're on an uncommon distribution, which the automatic "
+    echo "installer in this script doesn't support (yet). So go ahead and install the "
+    echo "libinput development library (it should be named something like 'libinput-dev' "
+    echo "in your distribution's package repo), and when that's done, come back and "
+    echo "re-run this script."
+    exit 127
+
+elif [[ -z $($($SEARCH_CMD)) ]]; then
+    echo -e "\n\e[0;33mlibinput dev library not found, installing...\e[0m"
+    
+    INSTALL_CMD="uncommon"  # default
+
+    declare -A installCommand;
+    installCommand["debian"]="apt-get -q install -y libinput-dev"
+    installCommand["redhat"]="dnf -y install libinput-devel"
+    installCommand["arch"]="pacman -S --noconfirm libinput-devel"
+    installCommand["suse"]="zypper install -y libinput-devel"
+
+
+    if   [[ -n $ID_LIKE ]]; then
+        INSTALL_CMD=${installCommand[${ID_LIKE}]}
+    elif [[ -n $ID ]]; then
+        INSTALL_CMD=${installCommand[${ID}]}
+    fi
+
+
+    if [[ $INSTALL_CMD = "uncommon" || -z $SEARCH_CMD ]]; then
+        echo -e "[\e[0;31m FAIL \e[0m]"
+        echo -e "\nIt looks like you're on an uncommon distribution, which the automatic "
+        echo "installer in this script doesn't support (yet). So go ahead and install the "
+        echo "libinput development library (it should be named something like 'libinput-dev' " 
+        echo "in your distribution's package repo), and when that's done, come back and "
+        echo "re-run this script."
+        exit 127
+    # probably redundant, but I want to make sure this case is caught
+    else
+        $INSTALL_CMD
+        if [[ $? -ne 0 ]]; then
+            echo -e "[\e[0;31m FAIL \e[0m]"
+            echo -e "\nIt looks like there was an issue with installing the libinput development "
+            echo "library, which were not available on the system when this script started. "
+            echo "They need to be installed prior to the installation of this program, so go "
+            echo "ahead and install the libinput development library (it should be named "
+            echo "something like 'libinput-dev' in your distribution's package repo), and "
+            echo "when that's done, come back and re-run this script."
+            exit 127
+        fi
+    fi
+fi
+
 # verify CWD is the repo folder
 if [[ ${PWD##*/} != "linux-3-finger-drag" ]]; then
     echo -e "[\e[0;31m FAIL \e[0m]"
@@ -20,24 +92,8 @@ if [[ ${PWD##*/} != "linux-3-finger-drag" ]]; then
     exit 1
 fi
 
-
 echo -e "[\e[0;32m DONE \e[0m]"
 
-
-# 0. Check if libinput tools is installed
-# if the command isn't found, stdout will be null
-# (since output will be in stderr only, which we won't show)
-echo -n "Checking for libinput helper tools...           "
-if [[ -z "$(libinput --version 2> /dev/null)" ]]; then
-    echo -e "[\e[0;31m FAIL \e[0m]"
-    echo -e "\n\e[0;31mFatal\e[0m: libinput helper tools are not installed, and are "
-    echo "needed to run the program."
-    echo "See https://pkgs.org/download/libinput-tools or https://pkgs.org/download/libinput-utils"
-    echo -e "for information on installing them for your distro.\n"
-    exit 127
-else
-    echo -e "[\e[0;32m DONE \e[0m]"
-fi
 
 # (1. repo already cloned, presumably)
 
@@ -68,7 +124,7 @@ echo "If there are any other services active that use 3-finger gestures,"
 echo "please adjust them to use 4 fingers instead (see installation step 2 in the README). "
 echo "This avoids ambiguity in your system's input."
 echo 
-echo -n "Press [Enter] when you have completed this."
+echo -ne "\e[0;33mPress \e[0m[\e[0;32mEnter\e[0m] \e[0;33mwhen you have completed this.\e[0m"
 read
 
 
@@ -98,6 +154,11 @@ echo
 ## this needs to be done as the user, or else is messes up the permissions
 ## Cargo should never really be run as root anyway
 su $SUDO_USER -c 'cargo build --release'
+if [ $? -ne 0 ]; then
+    echo -e "\n\e[0;33mHint:\e[0m You probably need to install the libinput development library, \
+        which package is typically named something like 'libinput-dev'." 
+    exit 127
+fi
 echo
 
 
