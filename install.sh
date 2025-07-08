@@ -19,7 +19,7 @@ SEARCH_CMD="uncommon"  # default
 declare -A searchCommand;
 searchCommand["debian"]="apt list -qq --installed libinput-dev"
 searchCommand["redhat"]="dnf list --installed libinput-devel"
-searchCommand["arch"]="pacman -Q --noconfirm libinput-devel"
+searchCommand["arch"]="pacman -Qs libinput"
 searchCommand["suse"]="zypper search --installed-only libinput-devel"
 
 # set all variables from the os-release file
@@ -48,7 +48,7 @@ elif [[ -z $($($SEARCH_CMD)) ]]; then
     declare -A installCommand;
     installCommand["debian"]="apt-get -q install -y libinput-dev"
     installCommand["redhat"]="dnf -y install libinput-devel"
-    installCommand["arch"]="pacman -S --noconfirm libinput-devel"
+    installCommand["arch"]="pacman -S --noconfirm libinput"
     installCommand["suse"]="zypper install -y libinput-devel"
 
 
