@@ -107,7 +107,7 @@ You may need to create the folder `rules.d` in `/etc/udev`.
 echo "uinput" | sudo tee /etc/modules-load.d/uinput.conf 2&>/dev/null
 ```
 
-Add the udev rules to your system:
+Now you can the udev rules to your system:
 ```
 sudo cp ./60-uinput.rules /etc/udev/rules.d
 ```
