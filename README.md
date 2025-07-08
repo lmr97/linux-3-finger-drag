@@ -34,6 +34,10 @@ You can execute the install script with the following:
 sudo bash install.sh
 ```
 
+## Getting updates
+
+You can update your version of `linux-3-finger-drag` using the `update.sh` script. 
+
 ## Manual installation
 
 ### 0. Install the `libinput` dev library (you probably have it already)
