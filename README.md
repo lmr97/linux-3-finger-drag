@@ -24,7 +24,7 @@ The included `install.sh` installs the program as a SystemD user unit (other ini
 It requires the following to run properly: 
 * **Root permissions**
 * A working Rust installation (see [Rust's install guide](https://www.rust-lang.org/tools/install))
-* `libinput`'s helper tools (see Step 0 below for install details)
+* `libinput`'s development library (see Step 0 below for install details)
 
 It will also ask to reboot your system afterward, which is required to update permissions for `libinput` and `uinput`.
 
