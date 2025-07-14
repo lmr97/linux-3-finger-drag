@@ -56,7 +56,7 @@ sudo dnf install libinput-devel
 
 #### Arch
 ```
-sudo pacman -S libinput-devel
+sudo pacman -S libinput   # included in main package
 ```
 
 #### openSUSE
