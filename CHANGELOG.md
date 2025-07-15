@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.1 - 2025-07-15
+
+### Fixed
+
+- Fix bug where devices named "trackpad" (instead of "touchpad") are not found (issue [#8](https://github.com/lmr97/linux-3-finger-drag/issues/8#issuecomment-3073401437))
+
+### Changed
+
+- **Install script**: installation does not give the executable root ownership (since the necessary privileges are set via `uinput` rules)
+
 ## 1.1.0 - 2025-07-01
 
 ### Fixed

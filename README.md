@@ -144,6 +144,8 @@ Once you've got it working, copy it into `/usr/bin` for ease and consistency of 
 sudo cp ./target/release/linux-3-finger-drag /usr/bin
 ```
 
+**For my Rustacean friends**: a simple `cargo install --path .` will also work (with the permissions updated from step 3). Just make sure to substitute `~/.cargo/bin/` for `/usr/bin/` where it appears below, of course.
+
 ### 7. Set up configuration file (optional)
 
 See the Configuration section below about the included `3fd-config.json` file. If you'd like to configure the behavior of this program, run the following:

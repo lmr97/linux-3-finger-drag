@@ -96,17 +96,24 @@ pub mod libinput_init {
         // Libinput adds "touchpad" to the device you use for a trackpad.
         // This finds theat device among all active ones on your computer.
         let trackpad_find_opt = all_inputs.find(
-            |event| event.device().name().to_lowercase().contains("touchpad")
+            |event| {
+                let lc_dev_name = event.device().name().to_lowercase();
+                lc_dev_name.contains("touchpad") || lc_dev_name.contains("trackpad")
+            }
         );
         
         let udev_name = match trackpad_find_opt {
 
             Some(tp_add_ev) => tp_add_ev.device().sysname().to_string(),
-            None => panic!("ERROR: there does not seem to be a trackpad on your \
-                device (a device with 'touchpad' in its libinput name). If you're \
-                seeing this, please submit a Github issue at \
-                https://github.com/lmr97/linux-3-finger-drag/issues and I will look \
-                into it as soon as possible.")
+            None => panic!("ERROR: the program was unable to find the trackpad on your \
+                device (a device with 'touchpad' or 'trackpad' in its libinput name). \
+                \nThere may also be a permissions issue (the `input` crate is ambiguous \
+                on this), since this program needs access to /dev/input, so try running \
+                this program as root so it can access your trackpad. \
+                \nIf that works, make sure you're in the user group 'input' (see Step 3 \
+                of the Manual Install section of the README). If that doesn't work, \
+                please submit a Github issue at https://github.com/lmr97/linux-3-finger-drag/issues \
+                and I will look into it as soon as possible.")
         };
 
         let mut real_trackpad = Libinput::new_from_path(Interface);
