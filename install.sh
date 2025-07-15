@@ -156,20 +156,30 @@ echo
 su $SUDO_USER -c 'cargo build --release'
 if [ $? -ne 0 ]; then
     echo -e "\n\e[0;33mHint:\e[0m You probably need to install the libinput development library, \
-        which package is typically named something like 'libinput-dev'." 
+        which package is typically named something like 'libinput-dev' for your distribution. \
+        Some distributions bundle it with their libinput package, too." 
     exit 127
 fi
 echo
 
 
 # 6. Install to /usr/bin
-# If you're getting permission issues, try setting the setuid bit (to execute as root) with
+# If you're getting permission issues (after a reboot), try setting the 
+# setuid bit, so it will execute as root, by running
 #     
 #     chmod u+s /usr/bin/linux-3-finger-drag 
 #
-# This isn't preferred (unless you trust my program), but it will solve the issue.
+# You can also change its owner to root by a simple:
+#
+#     chown root:root /usr/bin/linux-3-finger-drag
+# 
+# Neither of these are preferred security-wise (unless you trust my program), 
+# but it should solve the issue.
 echo -n "Installing binary to /usr/bin...                "
-cp ./target/release/linux-3-finger-drag /usr/bin/
+
+# with the user added to the 'input' group, root does not need to
+# own the executable, and stick to the principle of least privilege.
+cp --preserve=ownership ./target/release/linux-3-finger-drag /usr/bin/
 echo -e "[\e[0;32m DONE \e[0m]"
 
 
