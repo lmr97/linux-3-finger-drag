@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use signal_hook::{self, consts::{SIGINT, SIGTERM}};
-use ansi_term::Color::Yellow;
+use ansi_term::Color::{Yellow, Green};
 
 mod virtual_trackpad;
 mod event_handler;
@@ -21,7 +21,7 @@ fn main() -> Result<(), std::io::Error> {
         }
     };
 
-    let mut vtrackpad = virtual_trackpad::start_handler();
+    let mut vtrackpad = virtual_trackpad::start_handler()?;
 
     // handling SIGINT and SIGTERM
     let should_exit = Arc::new(AtomicBool::new(false));
@@ -29,27 +29,30 @@ fn main() -> Result<(), std::io::Error> {
     signal_hook::flag::register(SIGTERM, Arc::clone(&should_exit)).unwrap();
     signal_hook::flag::register(SIGINT, Arc::clone(&should_exit)).unwrap();
 
-    
-    let mut real_trackpad = init_fns::libinput_init::find_real_trackpad()?;
+    if let Ok(mut real_trackpad) = init_fns::libinput_init::find_real_trackpad() {
 
-    loop {
+        println!("[ {} ]: linux-3-finger-drag started successfully!", Green.paint("INFO"));
 
-        // handle interrupts
-        if should_exit.load(Ordering::Relaxed) {
-            break;
-        }
-        
-        if let Err(e) = real_trackpad.dispatch() {
-            println!("ERROR during runtime: {:?}", e);
-        }
+        loop {
 
-        for event in &mut real_trackpad {
+            // handle interrupts
+            if should_exit.load(Ordering::Relaxed) {
+                break;
+            }
             
-            event_handler::translate_gesture(event, &mut vtrackpad, &configs);
+            if let Err(e) = real_trackpad.dispatch() {
+                println!("ERROR during runtime: {:?}", e);
+            }
+
+            for event in &mut real_trackpad {
+                
+                event_handler::translate_gesture(event, &mut vtrackpad, &configs);
+            }
         }
     }
 
-    println!("\nSignal received, cleaning up and exiting...");
+    // if either a signal is received, or there was some issue during initialization
+    println!("\n[ {} ]: Cleaning up and exiting...", Green.paint("INFO"));
     vtrackpad.mouse_up();    // just in case
     vtrackpad.dev_destroy(); // we don't need virtual devices cluttering the system
 
