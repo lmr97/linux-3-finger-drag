@@ -17,6 +17,7 @@ use input_linux::{
     UInputHandle
 };
 use nix::libc::O_NONBLOCK;
+use ansi_term::Color::Red;
 
 // so I can attach mouse specific methods to this 
 // UInputHandle meant to model a mouse
@@ -25,20 +26,29 @@ pub struct VirtualTrackpad {
     mouse_is_down: bool
 }
 
-pub fn start_handler() -> VirtualTrackpad {
-    let uinput_file = OpenOptions::new()
+pub fn start_handler() -> Result<VirtualTrackpad, std::io::Error> {
+    let uinput_file_res = OpenOptions::new()
         .read(true)
         .write(true)
         .custom_flags(O_NONBLOCK)
-        .open("/dev/uinput")
-        .expect("
-            You are not yet allowed to write to /dev/uinput.
-            Some things to try:
-            - Update the udev rules for uinput (see installation guide in README.md, step 3.1)
-            - Log out and log in again
-            - Restart your computer
-            - FOR ARCH: make sure the uinput kernel module is loaded on boot
-            ");
+        .open("/dev/uinput");
+
+    let uinput_file = match uinput_file_res {
+        Ok(file) => file,
+        Err(e) => {
+            println!(
+                "\n[ {} ]: You are not yet allowed to write to /dev/uinput.\n\
+                Some things to try:\n\
+                - Update the udev rules for uinput (see installation guide in README.md, step 3.1)\n\
+                - Log out and log in again\n\
+                - Restart your computer\n\
+                - FOR ARCH: make sure the uinput kernel module is loaded on boot\n",
+                Red.paint("ERROR")
+            );
+            return Err(e);
+        }
+    };
+
     let uhandle = UInputHandle::new(uinput_file);
 
     uhandle.set_evbit(EventKind::Key).unwrap();
@@ -60,10 +70,12 @@ pub fn start_handler() -> VirtualTrackpad {
     // needed to let the system catch up
     thread::sleep(time::Duration::from_secs(1));
 
-    VirtualTrackpad {
-        handle: uhandle,
-        mouse_is_down: false
-    }
+    Ok(
+        VirtualTrackpad {
+            handle: uhandle,
+            mouse_is_down: false
+        }
+    )
 
 }
 

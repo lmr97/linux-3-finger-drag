@@ -67,6 +67,7 @@ pub mod libinput_init {
     use std::os::unix::{fs::OpenOptionsExt, io::OwnedFd};
     use std::path::Path;
     use input::{Libinput, LibinputInterface, event::EventTrait};
+    use users::{get_user_by_uid, get_current_uid, get_user_groups};
     use ansi_term::Color::{Red, Green};
 
     // straight from the docs for input.rs, if I'm honest
@@ -88,80 +89,150 @@ pub mod libinput_init {
     }
 
 
-    pub fn find_real_trackpad() -> Result<Libinput, std::io::Error> {
-
-        let mut all_inputs: Libinput = Libinput::new_with_udev(Interface);
-        all_inputs.udev_assign_seat("seat0").unwrap();   // will not throw an error on failure!
-
-        // Libinput adds "touchpad" to the device you use for a trackpad.
-        // This finds theat device among all active ones on your computer.
-        let trackpad_find_opt = all_inputs.find(
-            |event| {
-                let lc_dev_name = event.device().name().to_lowercase();
-                lc_dev_name.contains("touchpad") || lc_dev_name.contains("trackpad")
-            }
-        );
-        
-        let udev_name = match trackpad_find_opt {
-
-            Some(tp_add_ev) => tp_add_ev.device().sysname().to_string(),
-            None => {
-                // deduce the error 
-                // the `input` crate does not give any errors from udev_assign_seat()
-                // even on failure, so we've gotta figure it out ourselves!
-                
-                // If the program found 0 events at all, then the program has a permissions issue.
-                // it's okay to consume the all_inputs value, since the code will panic on this 
-                // this branch of the match statment anyway
-                if all_inputs.collect::<Vec<input::Event>>().len() == 0 {
-                    panic!("\n[ {} ]: This program does not have permission to access \
-                        /dev/input to read trackpad events. Make sure you've followed \
-                        the instructions in Step 3 in the Manual Install section of the \
-                        README. If you've already done all these things, try logging out \
-                        and logging in again. And if that doesn't help, try rebooting \
-                        (this can be necessary to update permissions and user groups). \
-                        If all of these fail, please submit a Github issue at \
-                        https://github.com/lmr97/linux-3-finger-drag/issues and I will \
-                        look into it as soon as possible.\n",
-                        Red.paint("ERROR")
-                    );
-                }
-
-                panic!("\n[ {} ]: This program was unable to find the trackpad on your device. \
-                    If you're seeing this, please submit a Github issue at \
-                    https://github.com/lmr97/linux-3-finger-drag/issues \
-                    and I will look into it as soon as possible.\n",
-                    Red.paint("ERROR")
-                );
-            }
-        };
+    fn bind_to_real_trackpad(tp_udev_name: String) -> Result<Libinput, Error> {
 
         let mut real_trackpad = Libinput::new_from_path(Interface);
 
-        match real_trackpad.path_add_device(&format!("/dev/input/{udev_name}")) {
+        match real_trackpad.path_add_device(&format!("/dev/input/{tp_udev_name}")) {
 
             Some(real_dev) => {
                 println!(
-                    "[ {} ]: Touchpad device \"{}\" (udev path: /dev/input/{}) found and successfully loaded.", 
+                    "\n[ {} ]: Touchpad device \"{}\" (udev path: /dev/input/{}) found and successfully loaded.", 
                     Green.paint("INFO"),
                     real_dev.name(),
                     real_dev.sysname()
                 );
                 Ok(real_trackpad)
             },
-            None => Err(
-                Error::new(
-                    ErrorKind::NotFound, 
-                    format!("\n [ {} ]: Could not load the touchpad device \
-                    named `/dev/input/{udev_name}`. It may also be a permissions \
+            None => {
+                println!("\n[ {} ]: Could not load the touchpad device \
+                    named `/dev/input/{tp_udev_name}`. It may also be a permissions \
                     error, but the underlying crate (input.rs) does not raise \
                     errors when a device cannot be loaded, so it's unclear. \
                     Please submit a Github issue at https://github.com/lmr97/linux-3-finger-drag/issues \
                     whether you sort this out or not, so as to help others in the \
                     same situation, and help me develop a better program. Thank \
-                    you for trying it out!\n", Red.paint("ERROR"))
+                    you for trying it out",
+                    Red.paint("ERROR")
+                );
+                Err(
+                    Error::new(
+                        ErrorKind::AddrNotAvailable, 
+                        "trackpad found, could not bind"
+                    )
                 )
-            )
+            }
         }
+    }
+
+    // Deducing the error.
+    // 
+    // the `input` crate does not give any errors from udev_assign_seat()
+    // even on failure, so we've gotta figure it out ourselves!
+    
+    // There are two possible error conditions for this match arm:
+    // 
+    //    1. Insufficient permissions to access /dev/input
+    //
+    //    2. The device does not have a "trackpad" or "touchpad" 
+    //       in the name given by libinput
+    // 
+    // Here is how I am checking for each condition:
+    // 
+    //    1. Permissions -- If one of the following is true:
+    //       a. The program found 0 libinput events at all 
+    //       b. The user is not in the 'input' group
+    // 
+    //    2. Not found -- no conditions from (1.) are satisfied. 
+    //       This is a bug (if there's actually a trackpad), and 
+    //       warrants an issue being opened on GitHub.
+    fn raise_correct_error(devices_added: i8) -> Result<Libinput, std::io::Error> {
+
+        // define condition 1b
+        let you = get_user_by_uid(get_current_uid())
+            .expect(
+                "\n[ ERROR ]: The user that started this program (somehow) has been removed from \
+                the user database! Something strange is afoot..."
+            ); // error is not colored, but this is okay to me for a rare error
+
+        // current user will (almost) always have at least one group. If not, the process
+        // will crash here, but only upon initialization (not runtime)
+        let your_groups = get_user_groups(you.name(), you.primary_group_id())
+            .expect(
+                "\n[ ERROR ]: You are, somehow, not a part of any user groups. \
+                Something strange is afoot..."
+            ); // error is not colored, but this is okay to me for a rare error
+
+        let in_input_group = your_groups
+            .iter()
+            .find(|group| group.name() == "input")
+            .is_some();
+            
+
+        if devices_added == 0 || !in_input_group {
+            println!("\n[ {} ]: This program does not have permission to access \
+                /dev/input to read trackpad events, most likely because you are \
+                not in the user group 'input'. Make sure you've followed \
+                the instructions in Step 3 in the Manual Install section of the \
+                README. If you've already done all these things, try logging out \
+                and logging in again. And if that doesn't help, try rebooting \
+                (this can be necessary to update permissions and user groups). \
+                If all of these fail, please submit a Github issue at \
+                https://github.com/lmr97/linux-3-finger-drag/issues and I will \
+                look into it as soon as possible.",
+                Red.paint("ERROR")
+            );
+
+            return Err(
+                Error::new(ErrorKind::PermissionDenied,
+                    "not in user group 'input'"
+                )
+            );
+        }
+
+        println!("\n[ {} ]: This program was unable to find the trackpad on your device. \
+            If you're seeing this, please submit a Github issue at \
+            https://github.com/lmr97/linux-3-finger-drag/issues \
+            and I will look into it as soon as possible. Please include the following \
+            number in the bug report: dev_added_count: {}", 
+            Red.paint("ERROR"),
+            devices_added
+        );
+
+        Err(Error::new(ErrorKind::NotFound, "trackpad not found"))
+    }
+    
+
+
+    pub fn find_real_trackpad() -> Result<Libinput, std::io::Error> {
+
+        let mut all_inputs: Libinput = Libinput::new_with_udev(Interface);
+        all_inputs.udev_assign_seat("seat0").unwrap();   // will not throw an error on failure!
+
+        // Events added are dropped by the find() in the next statement, so they need to be 
+        // counted beforehand. Cloning all_inputs and finding the length of the collected Vec
+        // gave me issues as well, so we're sticking to a more tranparent, reliable method.
+        let mut dev_added_count: i8 = 0;
+        
+        // Libinput adds "touchpad" to the device you use for a trackpad.
+        // This finds theat device among all active ones on your computer.
+        let trackpad_find_opt = all_inputs.find(
+            |event| {
+                dev_added_count += 1;
+                let lc_dev_name = event.device().name().to_lowercase();
+                // lc_dev_name.contains("touchpad") 
+                // || 
+                (lc_dev_name.contains("trackpad") && !lc_dev_name.contains("virtual"))
+                // don't match the virtual trackpad
+            }
+        );
+        
+        let udev_name = match trackpad_find_opt {
+
+            Some(tp_add_ev) => tp_add_ev.device().sysname().to_string(),
+            None => return raise_correct_error(dev_added_count)
+        };
+
+        bind_to_real_trackpad(udev_name)
     }
 }
