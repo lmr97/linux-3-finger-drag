@@ -1,6 +1,6 @@
 [package]
 name = "linux-3-finger-drag"
-version = "1.1.1"
+version = "1.1.2"
 authors = ["Martin Reid <lmreid1997@gmail.com"]
 edition = "2021"
 
@@ -12,3 +12,4 @@ signal-hook = "0.3.17"
 serde = { version = "1.0.216", features = ["derive"] }
 serde_json = "1.0.133"
 input = "0.9.1"
+ansi_term = "0.12.1"

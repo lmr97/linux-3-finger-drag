@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use signal_hook::{self, consts::{SIGINT, SIGTERM}};
+use ansi_term::Color::Yellow;
 
 mod virtual_trackpad;
 mod event_handler;
@@ -13,8 +14,9 @@ fn main() -> Result<(), std::io::Error> {
         Ok(cfg) => cfg,
         Err(err) => {
             let cfg = Default::default();
-            println!("WARNING: {err}\n\nThe configuration file (at least) will not be accessed, \
-                and the program will continue execution (if possible), using defaults of:\n {cfg:#?}");
+            println!("\n[ {} ]: {err}\n\nThe configuration file (at least) will not be accessed, \
+                and the program will continue execution (if possible), using defaults of:\n {cfg:#?}",
+                Yellow.paint("WARNING"));
             cfg
         }
     };

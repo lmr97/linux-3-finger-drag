@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.2 - 2025-07-15
+
+### Fixed
+
+- Fix ambiguity of error cause when program cannot find trackpad, throwing separate error for permission issue vs `libinput` naming issue
+
+### Changed
+
+- Change error/warning styles, so they have colors!
+
 ## 1.1.1 - 2025-07-15
 
 ### Fixed

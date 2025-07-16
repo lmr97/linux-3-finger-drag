@@ -41,7 +41,7 @@ pub mod config {
                 let home = std::env::var_os("HOME").ok_or_else(|| {
                     // yes, this case has in fact happened to me, so it IS worth catching
                     "$HOME is either not accessible to this program, or is not defined in your environment. \
-                    What's most likely, though, is it's a permissions issue with the SystemD folder created to\
+                    What's most likely, though, is it's a permissions issue with the SystemD folder created to \
                     hold the config file or executable; did you create either using sudo?".to_owned()
                 })?;
                 PathBuf::from(home).join(".config")
@@ -67,6 +67,7 @@ pub mod libinput_init {
     use std::os::unix::{fs::OpenOptionsExt, io::OwnedFd};
     use std::path::Path;
     use input::{Libinput, LibinputInterface, event::EventTrait};
+    use ansi_term::Color::{Red, Green};
 
     // straight from the docs for input.rs, if I'm honest
     pub struct Interface;
@@ -90,8 +91,7 @@ pub mod libinput_init {
     pub fn find_real_trackpad() -> Result<Libinput, std::io::Error> {
 
         let mut all_inputs: Libinput = Libinput::new_with_udev(Interface);
-        all_inputs.udev_assign_seat("seat0").unwrap();
-
+        all_inputs.udev_assign_seat("seat0").unwrap();   // will not throw an error on failure!
 
         // Libinput adds "touchpad" to the device you use for a trackpad.
         // This finds theat device among all active ones on your computer.
@@ -105,15 +105,35 @@ pub mod libinput_init {
         let udev_name = match trackpad_find_opt {
 
             Some(tp_add_ev) => tp_add_ev.device().sysname().to_string(),
-            None => panic!("ERROR: the program was unable to find the trackpad on your \
-                device (a device with 'touchpad' or 'trackpad' in its libinput name). \
-                \nThere may also be a permissions issue (the `input` crate is ambiguous \
-                on this), since this program needs access to /dev/input, so try running \
-                this program as root so it can access your trackpad. \
-                \nIf that works, make sure you're in the user group 'input' (see Step 3 \
-                of the Manual Install section of the README). If that doesn't work, \
-                please submit a Github issue at https://github.com/lmr97/linux-3-finger-drag/issues \
-                and I will look into it as soon as possible.")
+            None => {
+                // deduce the error 
+                // the `input` crate does not give any errors from udev_assign_seat()
+                // even on failure, so we've gotta figure it out ourselves!
+                
+                // If the program found 0 events at all, then the program has a permissions issue.
+                // it's okay to consume the all_inputs value, since the code will panic on this 
+                // this branch of the match statment anyway
+                if all_inputs.collect::<Vec<input::Event>>().len() == 0 {
+                    panic!("\n[ {} ]: This program does not have permission to access \
+                        /dev/input to read trackpad events. Make sure you've followed \
+                        the instructions in Step 3 in the Manual Install section of the \
+                        README. If you've already done all these things, try logging out \
+                        and logging in again. And if that doesn't help, try rebooting \
+                        (this can be necessary to update permissions and user groups). \
+                        If all of these fail, please submit a Github issue at \
+                        https://github.com/lmr97/linux-3-finger-drag/issues and I will \
+                        look into it as soon as possible.\n",
+                        Red.paint("ERROR")
+                    );
+                }
+
+                panic!("\n[ {} ]: This program was unable to find the trackpad on your device. \
+                    If you're seeing this, please submit a Github issue at \
+                    https://github.com/lmr97/linux-3-finger-drag/issues \
+                    and I will look into it as soon as possible.\n",
+                    Red.paint("ERROR")
+                );
+            }
         };
 
         let mut real_trackpad = Libinput::new_from_path(Interface);
@@ -122,7 +142,8 @@ pub mod libinput_init {
 
             Some(real_dev) => {
                 println!(
-                    "Touchpad device \"{}\" (udev path: /dev/input/{}) found and successfully loaded.", 
+                    "[ {} ]: Touchpad device \"{}\" (udev path: /dev/input/{}) found and successfully loaded.", 
+                    Green.paint("INFO"),
                     real_dev.name(),
                     real_dev.sysname()
                 );
@@ -131,14 +152,14 @@ pub mod libinput_init {
             None => Err(
                 Error::new(
                     ErrorKind::NotFound, 
-                    format!("\nERROR: Could not load the touchpad device \
+                    format!("\n [ {} ]: Could not load the touchpad device \
                     named `/dev/input/{udev_name}`. It may also be a permissions \
                     error, but the underlying crate (input.rs) does not raise \
                     errors when a device cannot be loaded, so it's unclear. \
                     Please submit a Github issue at https://github.com/lmr97/linux-3-finger-drag/issues \
                     whether you sort this out or not, so as to help others in the \
                     same situation, and help me develop a better program. Thank \
-                    you for trying it out!")
+                    you for trying it out!\n", Red.paint("ERROR"))
                 )
             )
         }
