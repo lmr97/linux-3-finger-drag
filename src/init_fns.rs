@@ -220,9 +220,8 @@ pub mod libinput_init {
             |event| {
                 dev_added_count += 1;
                 let lc_dev_name = event.device().name().to_lowercase();
-                // lc_dev_name.contains("touchpad") 
-                // || 
-                (lc_dev_name.contains("trackpad") && !lc_dev_name.contains("virtual"))
+                lc_dev_name.contains("touchpad") 
+                || (lc_dev_name.contains("trackpad") && !lc_dev_name.contains("virtual"))
                 // don't match the virtual trackpad
             }
         );
