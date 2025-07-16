@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.4 - 2025-07-16
+
+### Fix
+
+- Fix method of locating user trackpad, base it on device capabilities, not name
+
 
 ## 1.1.3 - 2025-07-15
 

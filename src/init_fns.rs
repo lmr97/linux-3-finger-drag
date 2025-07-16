@@ -66,7 +66,12 @@ pub mod libinput_init {
     use std::fs::{File, OpenOptions};
     use std::os::unix::{fs::OpenOptionsExt, io::OwnedFd};
     use std::path::Path;
-    use input::{Libinput, LibinputInterface, event::EventTrait};
+    use input::{
+        Libinput, 
+        LibinputInterface, 
+        event::EventTrait, 
+        DeviceCapability::{Gesture, Pointer}
+    };
     use users::{get_user_by_uid, get_current_uid, get_user_groups};
     use ansi_term::Color::{Red, Green};
 
@@ -219,10 +224,9 @@ pub mod libinput_init {
         let trackpad_find_opt = all_inputs.find(
             |event| {
                 dev_added_count += 1;
-                let lc_dev_name = event.device().name().to_lowercase();
-                lc_dev_name.contains("touchpad") 
-                || (lc_dev_name.contains("trackpad") && !lc_dev_name.contains("virtual"))
-                // don't match the virtual trackpad
+                event.device().has_capability(Pointer) 
+                && event.device().has_capability(Gesture)
+                // virtual trackpad only has "pointer" capability
             }
         );
         
