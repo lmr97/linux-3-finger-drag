@@ -1,5 +1,17 @@
 # Changelog
 
+
+## 1.1.3 - 2025-07-15
+
+### Changed
+
+- Change the error-catching logic and messages to be more detailed
+
+### Added
+
+- **Update script**: Add the command to actually build the new version once pulled
+- **Update script**: Add a check of the working directory to ensure the script is running from the repo directory
+
 ## 1.1.2 - 2025-07-15
 
 ### Fixed
