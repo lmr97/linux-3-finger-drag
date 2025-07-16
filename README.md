@@ -100,7 +100,7 @@ The process is essentially the same: there is typically a configuration file som
 
 ### 3. Update permissions
 
-This programs reads from `libinput` (using `/dev/input/event0`), and writes to `/dev/uinput`, so it requires an adjustment of permissions to accomplish both. 
+This programs reads cursor events from your trackpad (using `/dev/input/event0`), and writes to `/dev/uinput`, so it requires an adjustment of permissions to accomplish both. 
 
 #### 3.1 For `uinput`
 For more info about what's being done here, see [this section](https://wiki.archlinux.org/title/Udev#Allowing_regular_users_to_use_devices) of the ArchWiki article on `udev`. 
