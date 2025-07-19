@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.2.0 - 2025-07-19
+
+### Added
+
+- Add optional config field `logFile` to send logs to an external file; defaults to standard output if the field is not set (or file path is invalid)
+- Add optional config field `logLevel` to set the logging verbosity level. This can be one of the following values (from least to most verbose):
+    1. `off`
+    2. `error`
+    3. `warn`
+    4. `info`
+    5. `debug`
+    6. `trace`
+    For more info on these levels, see the documentation for [the `enum`](https://docs.rs/log/0.4.6/log/enum.Level.html) to which these values correspond.
+- Add optional config field `failFast` which will tell the program to exit on the first runtime error (after setup; errors occurring during setup will always cause the program to exit) 
+- Add more detailed startup logging
+- Add Contents section to the README for easier navigation
+
+### Changed
+
+- Cause program to exit with non-zero status on fatal errors during startup
+- Install script will now only soft-reboot (reboot user-space only) instead of fully reboot
+- Prevent program from crashing during runtime in any control path (unless configured to, see the Added section for this version), but will log errors to the console
+- Change logging mechanism to `simplelog` crate
+
+
 ## 1.1.4 - 2025-07-16
 
 ### Fix
