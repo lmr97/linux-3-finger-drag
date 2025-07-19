@@ -17,7 +17,7 @@ use input_linux::{
     UInputHandle
 };
 use nix::libc::O_NONBLOCK;
-use ansi_term::Color::Red;
+use log::{debug, error};
 
 // so I can attach mouse specific methods to this 
 // UInputHandle meant to model a mouse
@@ -36,14 +36,13 @@ pub fn start_handler() -> Result<VirtualTrackpad, std::io::Error> {
     let uinput_file = match uinput_file_res {
         Ok(file) => file,
         Err(e) => {
-            println!(
-                "\n[ {} ]: You are not yet allowed to write to /dev/uinput.\n\
+            error!(
+                "You are not yet allowed to write to /dev/uinput.\n\
                 Some things to try:\n\
                 - Update the udev rules for uinput (see installation guide in README.md, step 3.1)\n\
                 - Log out and log in again\n\
                 - Restart your computer\n\
                 - FOR ARCH: make sure the uinput kernel module is loaded on boot\n",
-                Red.paint("ERROR")
             );
             return Err(e);
         }
@@ -51,6 +50,12 @@ pub fn start_handler() -> Result<VirtualTrackpad, std::io::Error> {
 
     let uhandle = UInputHandle::new(uinput_file);
 
+    // I'm using unwraps here because this function is only called 
+    // during the program's setup phase. I've also never had these 
+    // functions below crash the program; if this `start_handler()`
+    // ever crashes (from my experience), it's always an issue with
+    // trying to read `/dev/uinput`. It's typically smooth sailing
+    // in this function after that succeeds. 
     uhandle.set_evbit(EventKind::Key).unwrap();
     uhandle.set_keybit(input_linux::Key::ButtonLeft).unwrap();
 
@@ -66,9 +71,10 @@ pub fn start_handler() -> Result<VirtualTrackpad, std::io::Error> {
     };
     let device_name = b"Virtual trackpad (created by linux-3-finger-drag)";
     uhandle.create(&input_id, device_name, 0, &[]).unwrap();
+    debug!("Virtual trackpad successfully created.");
 
-    // needed to let the system catch up
-    thread::sleep(time::Duration::from_secs(1));
+    // may be needed to let the system catch up
+    thread::sleep(time::Duration::from_millis(500));
 
     Ok(
         VirtualTrackpad {
@@ -81,9 +87,9 @@ pub fn start_handler() -> Result<VirtualTrackpad, std::io::Error> {
 
 impl VirtualTrackpad
 {
-    pub const ZERO: EventTime = EventTime::new(0, 0);
+    const ZERO: EventTime = EventTime::new(0, 0);
 
-    pub fn mouse_down(&mut self) {
+    pub fn mouse_down(&mut self) -> Result<(), std::io::Error> {
         let events = [
             InputEvent::from(
                 KeyEvent::new(
@@ -98,11 +104,12 @@ impl VirtualTrackpad
                     0)
                 ).into_raw(),
         ];
-        self.handle.write(&events).unwrap();
+        self.handle.write(&events)?;
         self.mouse_is_down = true;
+        Ok(())
     }
 
-    pub fn mouse_up(&mut self) {   
+    pub fn mouse_up(&mut self) -> Result<(), std::io::Error> {   
 
         let events = [
             InputEvent::from(
@@ -119,12 +126,13 @@ impl VirtualTrackpad
                 ).into_raw(),
         ];
 
-        self.handle.write(&events).unwrap();
+        self.handle.write(&events)?;
         self.mouse_is_down = false;
+        Ok(())
     }
 
     // delay is in milliseconds
-    pub fn mouse_up_delay(&mut self, delay: u64) {
+    pub fn mouse_up_delay(&mut self, delay: u64) -> Result<(), std::io::Error> {
         thread::sleep(time::Duration::from_millis(delay));
 
         let events = [
@@ -141,11 +149,12 @@ impl VirtualTrackpad
                     0)
                 ).into_raw(),
         ];
-        self.handle.write(&events).unwrap();
+        self.handle.write(&events)?;
         self.mouse_is_down = false;
+        Ok(())
     }
 
-    pub fn mouse_move_relative(&self, x_rel: f64, y_rel:f64) {
+    pub fn mouse_move_relative(&self, x_rel: f64, y_rel:f64) -> Result<(), std::io::Error> {
         // RelativeEvent::new() can only take integers, 
         // so some precision must be lost. But this needs to be done 
         // without bias, since x_rel and y_rel can be negative:
@@ -190,10 +199,11 @@ impl VirtualTrackpad
                     0)
                 ).into_raw(),
         ];
-        self.handle.write(&events).unwrap();
+        self.handle.write(&events)?;
+        Ok(())
     }
 
-    pub fn dev_destroy(&self) {
-        self.handle.dev_destroy().unwrap();
+    pub fn destruct(&self) -> Result<(), std::io::Error>{
+        self.handle.dev_destroy()
     }
 }

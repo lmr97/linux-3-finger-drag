@@ -8,17 +8,17 @@ use input::{
         GestureSwipeEvent
     }
 };
-use crate::virtual_trackpad::VirtualTrackpad;
-use crate::init_fns::config::Configuration;
+use super::virtual_trackpad::VirtualTrackpad;
+use super::config::Configuration;
 
 
-pub fn translate_gesture(event: Event, vtrackpad: &mut VirtualTrackpad, configs: &Configuration) {
+pub fn translate_gesture(event: Event, vtrackpad: &mut VirtualTrackpad, configs: &Configuration) -> Result<(), std::io::Error> {
     
     match event {
         Event::Gesture(gest_ev) => {
 
             // we don't care about gestures with other finger-counts
-            if gest_ev.finger_count() != 3 {return;}
+            if gest_ev.finger_count() != 3 {return Ok(());}
            
             match gest_ev {
 
@@ -26,7 +26,7 @@ pub fn translate_gesture(event: Event, vtrackpad: &mut VirtualTrackpad, configs:
                     match gest_hold_ev {
                         GestureHoldEvent::Begin(_) => vtrackpad.mouse_down(),
                         GestureHoldEvent::End(_)   => vtrackpad.mouse_up_delay(configs.drag_end_delay),
-                        _ => {}
+                        _ => Ok(())
                     }
                 },
                 GestureEvent::Swipe(swipe_ev) => {
@@ -40,22 +40,25 @@ pub fn translate_gesture(event: Event, vtrackpad: &mut VirtualTrackpad, configs:
                             );
 
                             // Ignore tiny motions. This helps reduce drift.
-                            if dx.abs() < configs.min_motion && dy.abs() < configs.min_motion {return;}
+                            if dx.abs() < configs.min_motion && dy.abs() < configs.min_motion {
+                                return Ok(());
+                            }
 
                             vtrackpad.mouse_move_relative(
                                 dx * configs.acceleration, 
                                 dy * configs.acceleration
-                            );
+                            )?;
+
+                            Ok(())
                         }
                         GestureSwipeEvent::Begin(_) => vtrackpad.mouse_down(),
                         GestureSwipeEvent::End(_)   => vtrackpad.mouse_up_delay(configs.drag_end_delay),
-                        _ => {}
+                        _ => Ok(())
                     }
                 }
                 _ => vtrackpad.mouse_up() // just in case, so the drag isn't locked
             }
         }
-        _ => {}
+        _ => Ok(())
     }
-    
 }
