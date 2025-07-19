@@ -163,7 +163,7 @@ fi
 echo
 
 
-# 6. Install to /usr/bin
+# 7. Install to /usr/bin
 # If you're getting permission issues (after a reboot), try setting the 
 # setuid bit, so it will execute as root, by running
 #     
@@ -183,7 +183,7 @@ cp --preserve=ownership ./target/release/linux-3-finger-drag /usr/bin/
 echo -e "[\e[0;32m DONE \e[0m]"
 
 
-# 7. Set up config file
+# 8. Set up config file
 # Has to be done as non-root user, so the file is accessible to the user
 echo -n "Installing config file...                       "
 su $SUDO_USER -c '\
@@ -192,9 +192,9 @@ su $SUDO_USER -c '\
 echo -e "[\e[0;32m DONE \e[0m]"
 
 
-# (8a. KDE Autostart needs to be configured through GUI)
+# (9a. KDE Autostart needs to be configured through GUI)
 
-# 8b. Installing SystemD service
+# 9b. Installing SystemD service
 # If using SystemD as the init system
 echo -n "Installing/enabling SystemD user unit...        "
 if [[ -n $(ps -p 1 | grep systemd) ]]; then
@@ -220,6 +220,7 @@ else
     echo "probably starting with OpenRC. Also, feel free to submit a pull request for this.)"
 fi
 
+## 5. Reboot
 echo
 echo "This installation requires a reboot to complete (for the group modification)."
 echo
@@ -229,7 +230,7 @@ read answer
 case "$answer" in 
     y | "")
         echo "Okay! Rebooting now..."
-        reboot
+        su $SUDO_USER -c 'systemctl soft-reboot'    # restart user-space only; a quicker operation to update groups
     ;;
     n)
         echo "Not rebooting. The program will start working after the next boot."
