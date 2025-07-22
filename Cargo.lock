@@ -127,7 +127,7 @@ dependencies = [
 
 [[package]]
 name = "linux-3-finger-drag"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "ansi_term",
  "input",

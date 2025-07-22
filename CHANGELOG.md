@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.0 - 2025-07-21
+
+### Changed
+
+- Change all configuration options be optional
+- Slim down manual install steps
+- Change install script to match more minimal install steps
+- Change error handling in config file parsing
+
+### Added
+
+- Troubleshooting section to README
+
 ## 1.2.0 - 2025-07-19
 
 ### Added
