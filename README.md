@@ -180,7 +180,13 @@ systemctl --user enable --now three-finger-drag.service
 
 
 ## Configuration
-This program looks for a JSON config file at `$XDG_CONFIG_HOME/linux-3-finger-drag/3fd-config.json`, or at `~/.config/linux-3-finger-drag/3fd-config.json` if `$XDG_CONFIG_HOME` isn't set. There is an example configuration file included in this repo, `3fd-config.json`, with all fields and default values. 
+This program looks for a JSON config files with the following precedence:
+
+1. `$XDG_CONFIG_HOME/linux-3-finger-drag/3fd-config.json`
+
+2. `~/.config/linux-3-finger-drag/3fd-config.json` (if `$XDG_CONFIG_HOME` isn't set) 
+
+There is an example configuration file included in this repo, `3fd-config.json`, with all fields included and set to default values. 
 
 Below are the fields that can be configured, with the values given here being the defaults. All fields are optional. 
 ```
@@ -189,12 +195,12 @@ Below are the fields that can be configured, with the values given here being th
     dragEndDelay: 0,
     minMotion: 0.2,
     failFast: false,
-    logFile: "stdout",    // this will mean logging to stdout
+    logFile: "stdout",
     logLevel: "info"
 }
 ```
 
-If the JSON is malformed in the found configuration file, or the file is simply not found, the defaults listed above are loaded instead, and the program continues. 
+If the JSON is malformed in the found configuration file, or the file is simply not found, the defaults listed above are loaded instead, and the program continues execution. 
 
 ### `acceleration` (float)
 This is a speedup multiplier which will be applied to all 3-finger gesture movements. Defaults to 1.0.
@@ -213,13 +219,20 @@ This allows the user to specify a log file separate from the console/`stdout`. I
 
 ### `logLevel` (string)
 This allows for the user to control logging verbosity. This can be one of the following values (from least to most verbose):
-    1. `off`
-    2. `error`
-    3. `warn`
-    4. `info`
-    5. `debug`
-    6. `trace`
-For more info on what these levels are intended to capture, see the documentation for [the `enum`](https://docs.rs/log/0.4.6/log/enum.Level.html) to which these values correspond. defaults to `"info"`.
+    
+  1. `off`
+
+  2. `error`
+  
+  3. `warn`
+  
+  4. `info`
+  
+  5. `debug`
+  
+  6. `trace`
+
+For more info on what these levels are intended to capture, see the documentation for [the `enum` to which these values correspond](https://docs.rs/log/0.4.6/log/enum.Level.html). defaults to `"info"`.
 
 ## How it works
 This program uses Rust bindings for libinput to detect three-finger gestures, and translates them into the right events to be written to [`/dev/uinput`](https://www.kernel.org/doc/html/v4.12/input/uinput.html) via a virtual trackpad. This gives the effect of three-finger dragging. This flow of control bypasses the display server layer entirely, which ensures compatability with any desktop environment.
