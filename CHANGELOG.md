@@ -12,6 +12,7 @@
 ### Added
 
 - Troubleshooting section to README
+- Table of contents to README
 
 ## 1.2.0 - 2025-07-19
 
