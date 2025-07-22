@@ -11,7 +11,7 @@ if [[ $(whoami) != "root" ]]; then
     exit 1
 fi
 
-# 0. Check if libinput dev library is installed
+# 1. Check if libinput dev library is installed
 
 # determine package manager
 SEARCH_CMD="uncommon"  # default
@@ -95,37 +95,7 @@ fi
 echo -e "[\e[0;32m DONE \e[0m]"
 
 
-# (1. repo already cloned, presumably)
-
-# 2. Disable 3-finger gestures in libinput-gestures
-echo -n "Updating libinput-gestures configs...           "
-if [[ -d /etc/libinput-gestures.conf ]]; then
-    cat /etc/libinput-gestures.conf > /etc/libinput-gestures.conf.bak
-    sed -i 's/gesture swipe up/gesture swipe up 4/' /etc/libinput-gestures.conf
-    sed -i 's/gesture swipe down/gesture swipe down 4/' /etc/libinput-gestures.conf
-    sed -i 's/gesture swipe left/gesture swipe left 4/' /etc/libinput-gestures.conf
-    sed -i 's/gesture swipe right/gesture swipe right 4/' /etc/libinput-gestures.conf
-    echo "Previous configs saved in /etc/libinput-gestures.conf.bak"
-elif [[ -d ~/.config/libinput-gestures.conf ]]; then
-    cat ~/.config/libinput-gestures.conf > ~/.config/libinput-gestures.conf.bak
-    sed -i 's/gesture swipe up/gesture swipe up 4/' ~/.config/libinput-gestures.conf
-    sed -i 's/gesture swipe down/gesture swipe down 4/' ~/.config/libinput-gestures.conf
-    sed -i 's/gesture swipe left/gesture swipe left 4/' ~/.config/libinput-gestures.conf
-    sed -i 's/gesture swipe right/gesture swipe right 4/' ~/.config/libinput-gestures.conf
-    echo "Previous configs saved in ~/.config/libinput-gestures.conf.bak"
-fi
-echo -e "[\e[0;32m DONE \e[0m]"
-echo
-echo "The libinput-gestures' config file (if installed) has been updated to "
-echo "change 3-finger gestures to 4-finger gestures, to avoid gesture"
-echo "ambiguity for the system."
-echo
-echo "If there are any other services active that use 3-finger gestures,"
-echo "please adjust them to use 4 fingers instead (see installation step 2 in the README). "
-echo "This avoids ambiguity in your system's input."
-echo 
-echo -ne "\e[0;33mPress \e[0m[\e[0;32mEnter\e[0m] \e[0;33mwhen you have completed this.\e[0m"
-read
+# (2. repo already cloned, presumably)
 
 
 # 3. Update permissions
@@ -158,12 +128,12 @@ if [ $? -ne 0 ]; then
     echo -e "\n\e[0;33mHint:\e[0m You probably need to install the libinput development library, \
         which package is typically named something like 'libinput-dev' for your distribution. \
         Some distributions bundle it with their libinput package, too." 
-    exit 127
+    exit 1
 fi
 echo
 
 
-# 7. Install to /usr/bin
+# 5. Install to /usr/bin
 # If you're getting permission issues (after a reboot), try setting the 
 # setuid bit, so it will execute as root, by running
 #     
@@ -183,7 +153,7 @@ cp --preserve=ownership ./target/release/linux-3-finger-drag /usr/bin/
 echo -e "[\e[0;32m DONE \e[0m]"
 
 
-# 8. Set up config file
+# Set up config file
 # Has to be done as non-root user, so the file is accessible to the user
 echo -n "Installing config file...                       "
 su $SUDO_USER -c '\
@@ -192,9 +162,9 @@ su $SUDO_USER -c '\
 echo -e "[\e[0;32m DONE \e[0m]"
 
 
-# (9a. KDE Autostart needs to be configured through GUI)
+# (7a. KDE Autostart needs to be configured through GUI)
 
-# 9b. Installing SystemD service
+# 7b. Installing SystemD service
 # If using SystemD as the init system
 echo -n "Installing/enabling SystemD user unit...        "
 if [[ -n $(ps -p 1 | grep systemd) ]]; then
@@ -220,7 +190,7 @@ else
     echo "probably starting with OpenRC. Also, feel free to submit a pull request for this.)"
 fi
 
-## 5. Reboot
+## 6. Reboot
 echo
 echo "This installation requires a reboot to complete (for the group modification)."
 echo
