@@ -19,8 +19,7 @@ fn main() -> Result<(), std::io::Error> {
         Err(err) => {
             let cfg = Default::default();
             println!("\n[PRE-LOG: WARNING]: {err}\n\nThe configuration file could not be \
-                accessed, and the program will continue execution (as possible), using \
-                defaults of:\n{cfg:#?}",
+                loaded, so the program will continue with defaults of:\n{cfg:#?}",
             );
             cfg
         }

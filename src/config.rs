@@ -1,11 +1,14 @@
 use serde::Deserialize;
 use serde_json::from_str;
 use std::fs::{OpenOptions, read_to_string};
+use std::io::ErrorKind;
 use std::path::PathBuf;
 use log::SetLoggerError;
 use simplelog::{LevelFilter, SimpleLogger, WriteLogger};
 
-// TODO: use renames to accept lower-case
+// This is simply a wrapper to allow deserialization of the
+// logLevel field into a simplelog::LevelFilter, albeit in
+// a roundabout way.
 #[derive(Deserialize, Debug, Clone)]
 pub enum LogLevel {
     #[serde(rename = "off")]
@@ -41,8 +44,11 @@ impl Into<LevelFilter> for LogLevel {
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Configuration {
+    #[serde(default = "default_one")]
     pub acceleration: f64,
+    #[serde(default = "default_zero")]
     pub drag_end_delay: u64, // in milliseconds
+    #[serde(default = "default_pt_two")]
     pub min_motion: f64,
     #[serde(default = "default_false")]
     pub fail_fast: bool,
@@ -69,12 +75,12 @@ impl Default for Configuration {
 // with the serde crate, despite several issues and PRs on the 
 // subject. Using functions to yield the values is the only 
 // accepted way.
+fn default_one()    -> f64      { 1.0 }
+fn default_zero()   -> u64      { 0 }
+fn default_pt_two() -> f64      { 0.2 }
 fn default_false()  -> bool     { false }
 fn default_stdout() -> String   { "stdout".to_string() }
 fn default_info()   -> LogLevel { LogLevel::Info }
-
-// Return errors as strings instead of full Error enums
-pub type SimpleError = String;
 
 
 // Configs are so optional that their absence should not crash the program,
@@ -92,25 +98,35 @@ pub type SimpleError = String;
 //
 // The user is also warned about this, so they can address the issues
 // if they want to configure the way the program runs.
-pub fn parse_config_file() -> Result<Configuration, SimpleError> {
+pub fn parse_config_file() -> Result<Configuration, std::io::Error> {
     let config_folder = match std::env::var_os("XDG_CONFIG_HOME") {
         Some(config_dir) => PathBuf::from(config_dir),
         None => {
-            let home = std::env::var_os("HOME").ok_or_else(|| {
-                // yes, this case has in fact happened to me, so it IS worth catching
-                "$HOME is either not accessible to this program, or is not defined in your environment. \
-                What's most likely, though, is it's a permissions issue with the SystemD folder created to \
-                hold the config file or executable; did you create either using sudo?".to_owned()
-            })?;
-            PathBuf::from(home).join(".config")
+            // yes, this case has in fact happened to me, so it IS worth catching
+            if let Some(home) = std::env::var_os("HOME") {
+                PathBuf::from(home).join(".config")
+            } else {
+                return Err(
+                    std::io::Error::new(
+                        ErrorKind::NotFound, 
+                        "Neither $XDG_CONFIG_HOME or $HOME defined in environment"
+                    )
+                );
+            }
         }
     };
     let filepath = config_folder.join("linux-3-finger-drag/3fd-config.json");
     let jsonfile = read_to_string(&filepath)
-        .map_err(|_| format!("Unable to locate JSON file at {:?} ", filepath))?;
+        .map_err(|_| 
+            // more descriptive error
+            std::io::Error::new(
+                ErrorKind::NotFound, 
+                format!("Unable to locate JSON file at {:?} ", filepath)
+            )
+        )?;
 
-    let config = from_str::<Configuration>(&jsonfile)
-        .map_err(|_| "Bad formatting found in JSON file".to_owned())?;
+    // use serde's error as is
+    let config = from_str::<Configuration>(&jsonfile)?;
 
     Ok(config)
 }
