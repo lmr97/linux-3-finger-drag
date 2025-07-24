@@ -23,7 +23,7 @@ use log::{debug, error};
 // UInputHandle meant to model a mouse
 pub struct VirtualTrackpad {
     handle: UInputHandle<File>,
-    mouse_is_down: bool
+    pub mouse_is_down: bool
 }
 
 pub fn start_handler() -> Result<VirtualTrackpad, std::io::Error> {
