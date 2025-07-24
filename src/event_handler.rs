@@ -53,14 +53,12 @@ pub fn translate_gesture(event: Event, vtrackpad: &mut VirtualTrackpad, configs:
                     match swipe_ev {
                         GestureSwipeEvent::Update(swipe_update) => {
                             
-                            let (dx, dy) = (
+                            update_mouse(
+                                vtrackpad, 
+                                configs, 
                                 swipe_update.dx_unaccelerated(), 
                                 swipe_update.dy_unaccelerated()
-                            );
-
-                            update_mouse(vtrackpad, configs, dx, dy)?;
-
-                            Ok(())
+                            )
                         }
                         GestureSwipeEvent::Begin(_) => vtrackpad.mouse_down(),
                         GestureSwipeEvent::End(_)   => vtrackpad.mouse_up_delay(configs.drag_end_delay),
@@ -81,14 +79,12 @@ pub fn translate_gesture(event: Event, vtrackpad: &mut VirtualTrackpad, configs:
             match point_ev {
                 PointerEvent::Motion(motion_ev) => {
                     
-                    let (dx, dy) = (
+                    update_mouse(
+                        vtrackpad, 
+                        configs, 
                         motion_ev.dx_unaccelerated(), 
                         motion_ev.dy_unaccelerated()
-                    );
-
-                    update_mouse(vtrackpad, configs, dx, dy)?;
-
-                    Ok(())
+                    )
                 },
                 _ => Ok(())
             }
