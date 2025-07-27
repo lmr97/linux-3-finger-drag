@@ -1,10 +1,24 @@
 # Changelog
 
+## 1.4.1 - 2025-07-27
+
+### Fixed
+
+- Fix issue (#11) where `dragEndDelay` config values were ignored
+
+### Changed
+
+- Change order of config options in `3fd-config.json` to alphabetical
+
+### Removed
+
+- Remove update script (didn't work, redundant)
+
 ## 1.4.0 - 2025-07-26
 
 ### Fixed
 
-- Fixed issue (#10) where the main loop would consume all of a CPU core while running
+- Fix issue (#10) where the main loop would consume all of a CPU core while running
 
 ### Added
 
@@ -28,6 +42,7 @@
 
 - Troubleshooting section to README
 - Table of contents to README
+
 
 ## 1.2.0 - 2025-07-19
 

@@ -304,7 +304,7 @@ dependencies = [
 
 [[package]]
 name = "linux-3-finger-drag"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "input",
  "input-linux",
