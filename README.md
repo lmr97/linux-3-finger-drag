@@ -30,10 +30,11 @@ OS | Version | Desktop Enviroment | Verified
   - [Set up](#Set-up-configuration)
   - [acceleration](#acceleration-float)
   - [dragEndDelay](#dragenddelay-int)
-  - [minMotion](#minmotion-float)
   - [failFast](#failfast-boolean)
   - [logFile](#logfile-string)
   - [logLevel](#loglevel-string)
+  - [minMotion](#minmotion-float)
+  - [responseTime](#responsetime-int)
 - [How it works](#how-it-works)
 - [Troubleshooting and tips](#troubleshooting-and-tips)
   - [``error: linking with `cc` failed: exit status: 1``](#error-linking-with-cc-failed-exit-status-1-during-compilation)
@@ -55,7 +56,7 @@ The included `install.sh` installs the program as a systemd user unit (other ini
 It requires the following to run properly: 
 * **Root permissions**
 * A working Rust installation (see [Rust's install guide](https://www.rust-lang.org/tools/install))
-* `libinput`'s development library (see Step 0 below for install details)
+* `libinput`'s development library (see Step 1 below for install details)
 
 It will also ask to reboot your system afterward, which is required to update permissions for `libinput` and `uinput`.
 
@@ -64,10 +65,6 @@ You can execute the install script with the following:
 ```
 sudo bash install.sh
 ```
-
-## Getting updates
-
-You can update your version of `linux-3-finger-drag` using the `update.sh` script. 
 
 ## Manual installation
 
@@ -209,12 +206,6 @@ This is a speedup multiplier which will be applied to all 3-finger gesture movem
 ### `dragEndDelay` (int)
 This is the time (in milliseconds) that the mouse hold will persist for after you lift your fingers (to give you a moment to reposition your fingers). Defaults to 0.
 
-### `minMotion` (float)
-This is the minimum motion, measured in pixels ([roughly](https://wayland.freedesktop.org/libinput/doc/latest/normalization-of-relative-motion.html)) that the drag gesture has to exceed to cause mouse movement; it's effectively a sensitivity value, but the program becomes less sensitive to mouse input the higher it is. Defaults to 0.2.
-
-### `responseTime` (int)
-This is the time (in milliseconds) that the main loop waits before fetching the next batch of events, the inverse of a refresh rate. Defaults to 5.
-
 ### `failFast` (boolean)
 This indicates whether the program is to exit with an error when the first runtime error is encountered. It will exit with an error if one is encountered during setup regardless of how this option is set. Defaults to `false`.
 
@@ -237,6 +228,12 @@ This allows for the user to control logging verbosity. This can be one of the fo
   6. `trace`
 
 For more info on what these levels are intended to capture, see the documentation for [the `enum` to which these values correspond](https://docs.rs/log/0.4.6/log/enum.Level.html). defaults to `"info"`.
+
+### `minMotion` (float)
+This is the minimum motion, measured in pixels ([roughly](https://wayland.freedesktop.org/libinput/doc/latest/normalization-of-relative-motion.html)) that the drag gesture has to exceed to cause mouse movement; it's effectively a sensitivity value, but the program becomes less sensitive to mouse input the higher it is. Defaults to 0.2.
+
+### `responseTime` (int)
+This is the time (in milliseconds) that the main loop waits before fetching the next batch of events, the inverse of a refresh rate. Defaults to 5.
 
 ## How it works
 This program uses Rust bindings for libinput to detect three-finger gestures, and translates them into the right events to be written to [`/dev/uinput`](https://www.kernel.org/doc/html/v4.12/input/uinput.html) via a virtual trackpad. This gives the effect of three-finger dragging. This flow of control bypasses the display server layer entirely, which ensures compatability with any desktop environment.
