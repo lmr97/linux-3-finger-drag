@@ -53,6 +53,7 @@ pub struct Configuration {
     pub acceleration: f64,
 
     #[serde(default = "default_0ms")]
+    #[serde_as(as = "serde_with::DurationMilliSeconds<u64>")]
     pub drag_end_delay: Duration,       // in milliseconds
 
     #[serde(default = "default_pt_two")]
