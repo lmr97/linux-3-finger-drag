@@ -1,8 +1,12 @@
 use serde::Deserialize;
 use serde_json::from_str;
-use std::fs::{OpenOptions, read_to_string};
-use std::io::ErrorKind;
-use std::path::PathBuf;
+use serde_with::serde_as;
+use std::{
+    fs::{OpenOptions, read_to_string},
+    io::ErrorKind,
+    path::PathBuf,
+    time::Duration
+};
 use log::SetLoggerError;
 use simplelog::{LevelFilter, SimpleLogger, WriteLogger};
 
@@ -41,19 +45,29 @@ impl Into<LevelFilter> for LogLevel {
 }
 
 
+#[serde_with::serde_as]  // this has to be before the #[derive]
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Configuration {
-    #[serde(default = "default_one")]
+    #[serde(default = "default_1")]
     pub acceleration: f64,
-    #[serde(default = "default_zero")]
-    pub drag_end_delay: u64, // in milliseconds
+
+    #[serde(default = "default_0ms")]
+    pub drag_end_delay: Duration,       // in milliseconds
+
     #[serde(default = "default_pt_two")]
     pub min_motion: f64,
+
+    #[serde(default = "default_5ms")]
+    #[serde_as(as = "serde_with::DurationMilliSeconds<u64>")]
+    pub response_time: Duration,        // in milliseconds
+
     #[serde(default = "default_false")]
     pub fail_fast: bool,
+
     #[serde(default = "default_stdout")]
     pub log_file: String,
+
     #[serde(default = "default_info")]
     pub log_level: LogLevel,
 }
@@ -62,8 +76,9 @@ impl Default for Configuration {
     fn default() -> Self {
         Configuration {
             acceleration: 1.0,
-            drag_end_delay: 0,
+            drag_end_delay: Duration::from_millis(0),
             min_motion: 0.2,
+            response_time: Duration::from_millis(5),
             fail_fast: false,
             log_file: "stdout".to_string(),
             log_level: LogLevel::Info
@@ -75,8 +90,9 @@ impl Default for Configuration {
 // with the serde crate, despite several issues and PRs on the 
 // subject. Using functions to yield the values is the only 
 // accepted way.
-fn default_one()    -> f64      { 1.0 }
-fn default_zero()   -> u64      { 0 }
+fn default_1()      -> f64      { 1.0 }
+fn default_0ms()    -> Duration { Duration::from_millis(0) }
+fn default_5ms()    -> Duration { Duration::from_millis(5) }
 fn default_pt_two() -> f64      { 0.2 }
 fn default_false()  -> bool     { false }
 fn default_stdout() -> String   { "stdout".to_string() }
@@ -91,6 +107,7 @@ fn default_info()   -> LogLevel { LogLevel::Info }
 //     acceleration: 1.0,
 //     dragEndDelay: 0,
 //     minMotion: 0.2,
+//     responseTime: 5,
 //     failFast: false,
 //     logFile: "stdout",
 //     logLevel: "info",
