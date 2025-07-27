@@ -6,6 +6,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
+use std::time::Duration;
 use std::{thread, time};
 
 use input_linux::{
@@ -132,8 +133,9 @@ impl VirtualTrackpad
     }
 
     // delay is in milliseconds
-    pub fn mouse_up_delay(&mut self, delay: u64) -> Result<(), std::io::Error> {
-        thread::sleep(time::Duration::from_millis(delay));
+    pub fn mouse_up_delay(&mut self, delay: Duration) -> Result<(), std::io::Error> {
+        
+        thread::sleep(delay);
 
         let events = [
             InputEvent::from(
