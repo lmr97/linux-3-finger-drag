@@ -1,5 +1,7 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::{
+    sync::{atomic::{AtomicBool, Ordering}, Arc},
+    thread::sleep
+};
 use signal_hook::{self, consts::{SIGINT, SIGTERM}};
 #[macro_use] extern crate log;
 
@@ -63,15 +65,17 @@ fn main() -> Result<(), std::io::Error> {
             let mut latest_runtime_error: Result<(), std::io::Error> = Ok(());  
             loop {
 
+                // this is to keep the infinite loop from filling out into
+                // entire CPU core, which it will do even on no-ops.
+                // This refresh rate (once per 5ms) should be sufficient 
+                // for most purposes.
+                sleep(configs.response_time);
+
                 // handle interrupts
                 if should_exit.load(Ordering::Relaxed) {
                     break;
                 }
                 
-                // I am aware that the use of println!() in this loop is inefficient, 
-                // but the errors they are logging should be very rare and should
-                // therefore not incur too high a burden on the CPU.
-                //
                 // Note: sometimes errors are logged by the `input` crate directly,
                 // but they are non-fatal; they're typically because the system is
                 // too slow to write events before their expiration. You can 
@@ -81,8 +85,6 @@ fn main() -> Result<(), std::io::Error> {
                 }
 
                 for event in &mut real_trackpad {
-                    
-                    //if !matches!(event, Event::Gesture(_)) { continue; }
 
                     // do nothing on success (or ignored gesture)
                     if let Err(e) = event_handler::translate_gesture(event, &mut vtrackpad, &configs) {
