@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.4.0 - 2025-07-26
+
+### Fixed
+
+- Fixed issue (#10) where the main loop would consume all of a CPU core while running
+
+### Added
+
+- Add configurable response time to config file, `responseTime`, to limit the amount of times the main loop runs per second. Default to 5ms.
+
+### Changed
+
+- Change in-source type for `dragEndDelay` from a `u64` to a `std::time::Duration`, deserialized into the type once. This is not to change the user interface, e.g. time-related fields in the config file are still written as simple integers.
+
+
 ## 1.3.0 - 2025-07-21
 
 ### Changed

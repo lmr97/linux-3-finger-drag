@@ -194,6 +194,7 @@ Below are the fields that can be configured, with the values given here being th
     acceleration: 1.0,
     dragEndDelay: 0,
     minMotion: 0.2,
+    responseTime: 5,
     failFast: false,
     logFile: "stdout",
     logLevel: "info"
@@ -210,6 +211,9 @@ This is the time (in milliseconds) that the mouse hold will persist for after yo
 
 ### `minMotion` (float)
 This is the minimum motion, measured in pixels ([roughly](https://wayland.freedesktop.org/libinput/doc/latest/normalization-of-relative-motion.html)) that the drag gesture has to exceed to cause mouse movement; it's effectively a sensitivity value, but the program becomes less sensitive to mouse input the higher it is. Defaults to 0.2.
+
+### `responseTime` (int)
+This is the time (in milliseconds) that the main loop waits before fetching the next batch of events, the inverse of a refresh rate. Defaults to 5.
 
 ### `failFast` (boolean)
 This indicates whether the program is to exit with an error when the first runtime error is encountered. It will exit with an error if one is encountered during setup regardless of how this option is set. Defaults to `false`.
