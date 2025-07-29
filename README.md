@@ -30,7 +30,6 @@ OS | Version | Desktop Enviroment | Verified
   - [Set up](#Set-up-configuration)
   - [acceleration](#acceleration-float)
   - [dragEndDelay](#dragenddelay-int)
-  - [failFast](#failfast-boolean)
   - [logFile](#logfile-string)
   - [logLevel](#loglevel-string)
   - [minMotion](#minmotion-float)
@@ -192,7 +191,6 @@ Below are the fields that can be configured, with the values given here being th
     dragEndDelay: 0,
     minMotion: 0.2,
     responseTime: 5,
-    failFast: false,
     logFile: "stdout",
     logLevel: "info"
 }
@@ -205,9 +203,6 @@ This is a speedup multiplier which will be applied to all 3-finger gesture movem
 
 ### `dragEndDelay` (int)
 This is the time (in milliseconds) that the mouse hold will persist for after you lift your fingers (to give you a moment to reposition your fingers). Defaults to 0.
-
-### `failFast` (boolean)
-This indicates whether the program is to exit with an error when the first runtime error is encountered. It will exit with an error if one is encountered during setup regardless of how this option is set. Defaults to `false`.
 
 ### `logFile` (string)
 This allows the user to specify a log file separate from the console/`stdout`. It works best with absolute paths, because `~` or other shell variables are not expanded, but relative filepaths work as well. Note that the program will not create the file if it doesn not exist; in this case, it will simply raise a warning and log to the console. If no file is specified, or the file path is invalid, the program will log to the console. Defaults to `"stdout"`.

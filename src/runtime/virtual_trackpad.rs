@@ -5,6 +5,7 @@
 // https://github.com/arcnmx/input-linux-rs/blob/main/examples/mouse-movements.rs
 
 use std::fs::{File, OpenOptions};
+use std::os::fd::AsFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::time::Duration;
 use std::{thread, time};
@@ -20,11 +21,12 @@ use input_linux::{
 use nix::libc::O_NONBLOCK;
 use log::{debug, error};
 
-// so I can attach mouse specific methods to this 
-// UInputHandle meant to model a mouse
+/// This struct is stateless: no position or mouse state is available.
+/// This is due to issues that arise from mutability in a mulit-thread
+/// context. If state is required, a wrapper struct will need to be
+/// created, or tracked externally somehow. 
 pub struct VirtualTrackpad {
     handle: UInputHandle<File>,
-    mouse_is_down: bool
 }
 
 pub fn start_handler() -> Result<VirtualTrackpad, std::io::Error> {
@@ -77,20 +79,43 @@ pub fn start_handler() -> Result<VirtualTrackpad, std::io::Error> {
     // may be needed to let the system catch up
     thread::sleep(time::Duration::from_millis(500));
 
-    Ok(
-        VirtualTrackpad {
-            handle: uhandle,
-            mouse_is_down: false
-        }
-    )
+    Ok(VirtualTrackpad { handle: uhandle })
 
+}
+
+
+impl Clone for VirtualTrackpad {
+    /// This clone() can theoretically panic since there is an expect() in 
+    /// its definition. This is because `try_cloned_to_owned`, from `std::io`,
+    /// utilizes libc's `fnctl`, which will only fail if there is the maximum
+    /// number of file descriptors to be opened is reached (or if the args
+    /// to it are invalid, but the Rust method takes no arguments except for
+    /// a known-valid FD, so the rest are controlled by the std library).
+    /// 
+    /// This makes it as safe as any other function to call, since it only fails
+    /// when there is a resource limitation issue (which would be a rare and 
+    /// system-wide problem).
+    fn clone(&self) -> Self {
+        let fd = self.handle
+            .as_fd()
+            .try_clone_to_owned()
+            .expect(
+                "uinput file descriptor could not be duplicated, \
+                likely do to hitting the maximum open file descriptors \
+                for this OS."
+        );
+
+        VirtualTrackpad {
+            handle: UInputHandle::new(File::from(fd))
+        }
+    }
 }
 
 impl VirtualTrackpad
 {
     const ZERO: EventTime = EventTime::new(0, 0);
 
-    pub fn mouse_down(&mut self) -> Result<(), std::io::Error> {
+    pub fn mouse_down(&self) -> Result<(), std::io::Error> {
         let events = [
             InputEvent::from(
                 KeyEvent::new(
@@ -106,11 +131,10 @@ impl VirtualTrackpad
                 ).into_raw(),
         ];
         self.handle.write(&events)?;
-        self.mouse_is_down = true;
         Ok(())
     }
 
-    pub fn mouse_up(&mut self) -> Result<(), std::io::Error> {   
+    pub fn mouse_up(&self) -> Result<(), std::io::Error> {   
 
         let events = [
             InputEvent::from(
@@ -128,12 +152,11 @@ impl VirtualTrackpad
         ];
 
         self.handle.write(&events)?;
-        self.mouse_is_down = false;
         Ok(())
     }
 
     // delay is in milliseconds
-    pub fn mouse_up_delay(&mut self, delay: Duration) -> Result<(), std::io::Error> {
+    pub fn mouse_up_delay(&self, delay: Duration) -> Result<(), std::io::Error> {
         
         thread::sleep(delay);
 
@@ -152,11 +175,11 @@ impl VirtualTrackpad
                 ).into_raw(),
         ];
         self.handle.write(&events)?;
-        self.mouse_is_down = false;
         Ok(())
     }
 
     pub fn mouse_move_relative(&self, x_rel: f64, y_rel:f64) -> Result<(), std::io::Error> {
+        
         // RelativeEvent::new() can only take integers, 
         // so some precision must be lost. But this needs to be done 
         // without bias, since x_rel and y_rel can be negative:
@@ -168,7 +191,6 @@ impl VirtualTrackpad
         // origin (from which relative motion is calculated) seeming to 
         // drift up or down the trackpad instead of staying where the 
         // three finger drag started.
-
         let x_rel_int = if x_rel > 0.0 {
             x_rel.floor() as i32
         } else {
@@ -205,7 +227,7 @@ impl VirtualTrackpad
         Ok(())
     }
 
-    pub fn destruct(&self) -> Result<(), std::io::Error>{
+    pub fn destruct(self) -> Result<(), std::io::Error>{
         self.handle.dev_destroy()
     }
 }

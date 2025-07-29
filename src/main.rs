@@ -1,16 +1,18 @@
-use std::{
-    sync::{atomic::{AtomicBool, Ordering}, Arc},
-    thread::sleep
-};
+use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
 use signal_hook::{self, consts::{SIGINT, SIGTERM}};
 #[macro_use] extern crate log;
 
-mod config;
-mod event_handler;
-mod libinput_init;
-mod virtual_trackpad;
+use linux_3_finger_drag::{
+    init::{config, libinput_init},
+    runtime::{
+        event_handler::{GestureTranslator, GtError},
+        virtual_trackpad
+    },
+    
+};
 
-fn main() -> Result<(), std::io::Error> {
+
+fn main() -> Result<(), GtError> {
 
     println!("[PRE-LOG: INFO]: Loading configuration...");
     let configs = match config::parse_config_file() {
@@ -38,38 +40,37 @@ fn main() -> Result<(), std::io::Error> {
         );
     };
 
-    let fail_fast = configs.fail_fast;
-
     // handling SIGINT and SIGTERM
     let should_exit = Arc::new(AtomicBool::new(false));
     signal_hook::flag::register(SIGTERM, Arc::clone(&should_exit)).unwrap();
     signal_hook::flag::register(SIGINT, Arc::clone(&should_exit)).unwrap();
 
 
-    let mut vtrackpad = virtual_trackpad::start_handler()?;
+    let vtrackpad = virtual_trackpad::start_handler()?;
+    let vtp_clone = vtrackpad.clone();
 
     info!("Searching for the trackpad on your device...");
 
+    // using a match case here instead of a `?` here so the program can destruct 
+    // the virtual trackpad before it exits
     let main_result = match libinput_init::find_real_trackpad() {
 
         Ok(mut real_trackpad) => {
             
             info!("linux-3-finger-drag started successfully!");
 
-            // `latest_runtime_error` gets set to latest runtime error, 
-            // if any occur.
-            //
-            // The program only exits during runtime when terminated 
-            // via signal from the OS, but if errors occurred, it 
-            // will exit with a non-zero status.
-            let mut latest_runtime_error: Result<(), std::io::Error> = Ok(());  
+            // lightweight async runtime, so you don't have to compile tokio
+            let runtime_exec = smol::Executor::new();
+            let mut translator = GestureTranslator::new(vtp_clone, configs.clone(), runtime_exec);
+            
             loop {
 
+                //debug!("starting loop...");
                 // this is to keep the infinite loop from filling out into
                 // entire CPU core, which it will do even on no-ops.
                 // This refresh rate (once per 5ms) should be sufficient 
                 // for most purposes.
-                sleep(configs.response_time);
+                std::thread::sleep(configs.response_time);
 
                 // handle interrupts
                 if should_exit.load(Ordering::Relaxed) {
@@ -81,26 +82,21 @@ fn main() -> Result<(), std::io::Error> {
                 // too slow to write events before their expiration. You can 
                 // differentiate those by their not having a time and log-level prefix.
                 if let Err(e) = real_trackpad.dispatch() {
-                    error!("A {} error occured during runtime: {}", e.kind(), e);
+                    error!("A {} error occured in reading device buffer: {}", e.kind(), e);
                 }
 
                 for event in &mut real_trackpad {
 
                     // do nothing on success (or ignored gesture)
-                    if let Err(e) = event_handler::translate_gesture(event, &mut vtrackpad, &configs) {
+                    if let Err(e) = translator.translate_gesture(event) {
 
-                        error!("A {} error occured during runtime: {}", e.kind(), e);
-
-                        if fail_fast { return Err(e); }
-                        
-                        latest_runtime_error = Err(e);  // update exit status to latest runtime error
-                    };
+                        error!("{:?}", e);     
+                    }
                 }
-            }
-
-            latest_runtime_error
+            };
+            Ok(())
         },
-        Err(e) => Err(e)
+        Err(e) => Err(GtError::from(e))
     };
 
     // the program arrives here if either a signal is received, 

@@ -63,9 +63,6 @@ pub struct Configuration {
     #[serde_as(as = "serde_with::DurationMilliSeconds<u64>")]
     pub response_time: Duration,        // in milliseconds
 
-    #[serde(default = "default_false")]
-    pub fail_fast: bool,
-
     #[serde(default = "default_stdout")]
     pub log_file: String,
 
@@ -80,7 +77,6 @@ impl Default for Configuration {
             drag_end_delay: Duration::from_millis(0),
             min_motion: 0.2,
             response_time: Duration::from_millis(5),
-            fail_fast: false,
             log_file: "stdout".to_string(),
             log_level: LogLevel::Info
         }
@@ -95,7 +91,6 @@ fn default_1()      -> f64      { 1.0 }
 fn default_0ms()    -> Duration { Duration::from_millis(0) }
 fn default_5ms()    -> Duration { Duration::from_millis(5) }
 fn default_pt_two() -> f64      { 0.2 }
-fn default_false()  -> bool     { false }
 fn default_stdout() -> String   { "stdout".to_string() }
 fn default_info()   -> LogLevel { LogLevel::Info }
 

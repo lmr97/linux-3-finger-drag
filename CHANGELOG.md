@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.5.0 - 2025-07-??
+
+### Added
+
+- Add auto cancelation of drag end delay upon other gesture
+
+### Removed
+
+- Remove option `failFast`; operation continues if initialization is successful, only logging errors, and not crashing
+
 ## 1.4.1 - 2025-07-27
 
 ### Fixed

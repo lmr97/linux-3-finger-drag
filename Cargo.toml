@@ -1,6 +1,6 @@
 [package]
 name = "linux-3-finger-drag"
-version = "1.4.1"
+version = "1.5.0"
 authors = ["Martin Reid <lmreid1997@gmail.com>"]
 edition = "2021"
 
@@ -15,3 +15,12 @@ users = "0.11.0"
 simplelog = "0.12.2"
 log = "0.4.27"
 serde_with = "3.14.0"
+smol = "2.0.2"
+
+[[bench]]
+name = "cloning"
+path = "src/benches/cloning.rs"
+harness = false
+
+[dev-dependencies]
+criterion = "0.7.0"
