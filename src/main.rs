@@ -87,6 +87,16 @@ fn main() -> Result<(), GtError> {
 
                 for event in &mut real_trackpad {
 
+                    // match event {
+                    //     input::Event::Gesture(g) => {
+                    //         debug!("recv'd gesture event");
+                    //         match g {
+                    //             _ => debug!("not gestureHold event received: {:?}", g)
+                    //         }
+                    //     },
+                    //     _ => debug!("not gesture event received: {:?}", event)
+                    // }
+                    
                     // do nothing on success (or ignored gesture)
                     if let Err(e) = translator.translate_gesture(event) {
 

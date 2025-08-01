@@ -1,19 +1,20 @@
+use std::any::Any;
 use std::io::ErrorKind;
 use std::mem;
 use std::sync::{Arc, PoisonError, MutexGuard};
-use input::event::{
-    gesture::GestureSwipeUpdateEvent,
-    pointer::PointerEvent
-};
 use smol::Task;
 use input::{
     Event,
-    event::gesture::{
-    GestureEvent, 
-        GestureEventCoordinates,
-        GestureEventTrait,
-        GestureHoldEvent,
-        GestureSwipeEvent
+    event::{
+        gesture::{
+        GestureEvent, 
+            GestureEventCoordinates,
+            GestureEventTrait,
+            GestureHoldEvent,
+            GestureSwipeEvent,
+            GestureSwipeUpdateEvent
+        },
+        pointer::PointerEvent
     }
 };
 
@@ -24,7 +25,6 @@ use super::virtual_trackpad::VirtualTrackpad;
 use super::super::init::config::Configuration;
 
 type MutexPoisonError<'e> = PoisonError<MutexGuard<'e, Arc<VirtualTrackpad>>>;
-
 
 // (G)esture (T)ranslation Error
 #[derive(Debug)]
@@ -72,8 +72,10 @@ impl Default for TaskHandle {
 }
 
 impl TaskHandle {
+    // executing a block_on runtime from the main thread causes a 
+    // deadlock
     fn cancel(self) -> Option<Result<(), GtError>> {
-        smol::future::block_on(async move {
+        smol::block_on(async move {
             
             debug!("Got into cancelation runtime");
             if self.task.is_finished() { 
@@ -123,28 +125,36 @@ impl<'a> GestureTranslator<'a> {
         debug!("Event received: {:?}", event);
         match event {
             Event::Gesture(gest_ev) => {
-
-                // we don't care about gestures with other finger-counts
-                if gest_ev.finger_count() != 3 { 
-                    return self.mouse_up_trunc_delay();
-                }
-            
+                debug!("Handling gesture event");
+                debug!("Type of gesture event is GestureHoldEvent: {}", std::any::TypeId::of::<GestureHoldEvent>() == gest_ev.type_id());
+                debug!("Number of fingers in gesture: {}", gest_ev.finger_count());
+           
                 match gest_ev {
-                    GestureEvent::Hold(gest_hold_ev) => {debug!("handling GestureHoldEvent"); self.handle_hold(gest_hold_ev)},
                     GestureEvent::Swipe(swipe_ev) => self.handle_swipe(swipe_ev),
-                    _ => self.mouse_up_trunc_delay() // just in case, so the drag isn't locked
+                    GestureEvent::Hold(gest_hold_ev) => {
+                        debug!("FOUND HOLD EVENT!");
+                        self.handle_hold(gest_hold_ev)
+                    },
+                    _ => {
+                        debug!("not matched on Swipe or Hold");
+                        self.mouse_up_now()
+                    } // just in case, so the drag isn't locked
                 }
             }
-            Event::Pointer(pointer_ev) => self.handle_pointer_ev(pointer_ev),
-            _ => self.mouse_up_trunc_delay()
+            //Event::Pointer(pointer_ev) => self.handle_pointer_ev(pointer_ev),
+            _ => {
+                debug!("not matched on Gesture or Pointer");
+                self.mouse_up_now()
+            }
         }
     }
 
 
     fn handle_hold(&mut self, gest_hold_ev: GestureHoldEvent) -> Result<(), GtError> {
 
+        debug!("IN HOLD HANDLER");
         match gest_hold_ev {
-            GestureHoldEvent::Begin(_) => {debug!("handling GestureHoldBegin"); self.mouse_down()},
+            GestureHoldEvent::Begin(_) => self.mouse_down(),
             GestureHoldEvent::End(_) => {
 
                 if self.configs.drag_end_delay.is_zero() { 
@@ -174,12 +184,16 @@ impl<'a> GestureTranslator<'a> {
                 
                 Ok(())
             },
-            _ => self.mouse_up_trunc_delay()
+            _ => self.mouse_up_now()
         }
     }
 
 
     fn handle_swipe(&mut self, swipe_ev: GestureSwipeEvent) -> Result<(), GtError> {
+        debug!("handling swipe");
+        if swipe_ev.finger_count() != 3 { 
+            return self.mouse_up_now();
+        }
         match swipe_ev {
             GestureSwipeEvent::Update(swipe_update) => self.handle_swipe_update(swipe_update),
             GestureSwipeEvent::Begin(_) => {debug!("handling GestureSwipeBegin"); self.mouse_down()},
@@ -204,12 +218,11 @@ impl<'a> GestureTranslator<'a> {
                 );
                 Ok(())
             },
-            _ => self.mouse_up_trunc_delay()
+            _ => self.mouse_up_now()
         }
     }
 
 
-    #[inline(always)]
     fn handle_swipe_update(&self, swipe_update: GestureSwipeUpdateEvent) -> Result<(), GtError> {
         
         let (dx, dy) = (
@@ -236,7 +249,7 @@ impl<'a> GestureTranslator<'a> {
         match p_ev {
             PointerEvent::Motion(mot_ev) => {
                 
-                if !self.mouse_is_down { return self.mouse_up_trunc_delay(); }
+                if !self.mouse_is_down { return self.mouse_up_now(); }
                 
                 let (dx, dy) = (
                     mot_ev.dx_unaccelerated(), 
@@ -256,7 +269,7 @@ impl<'a> GestureTranslator<'a> {
 
                 Ok(())
             },
-            _ => self.mouse_up_trunc_delay()
+            _ => self.mouse_up_now()
         }
     }
 
@@ -275,7 +288,9 @@ impl<'a> GestureTranslator<'a> {
         self.vtp.mouse_up().map_err(GtError::from)
     }
 
-    fn mouse_up_trunc_delay(&mut self) -> Result<(), GtError> {
+    #[track_caller]
+    fn mouse_up_now(&mut self) -> Result<(), GtError> {
+        debug!("Caller: {:?}", std::panic::Location::caller().line());
         debug!("Starting cancel of mouse_up_delay...");
         let mud_child = mem::take(&mut self.mud_child);
         debug!("Task is finished: {}", mud_child.task.is_finished());
