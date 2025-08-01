@@ -2,7 +2,7 @@ use std::any::Any;
 use std::io::ErrorKind;
 use std::mem;
 use std::sync::{Arc, PoisonError, MutexGuard};
-use smol::Task;
+use smol::{Task, channel::RecvError};
 use input::{
     Event,
     event::{
@@ -21,7 +21,7 @@ use input::{
 
 use log::debug;
 
-use super::virtual_trackpad::VirtualTrackpad;
+use super::virtual_trackpad::{VirtualTrackpad, VtpError};
 use super::super::init::config::Configuration;
 
 type MutexPoisonError<'e> = PoisonError<MutexGuard<'e, Arc<VirtualTrackpad>>>;
@@ -30,14 +30,24 @@ type MutexPoisonError<'e> = PoisonError<MutexGuard<'e, Arc<VirtualTrackpad>>>;
 #[derive(Debug)]
 #[allow(dead_code)]  // Rust complains that I don't read the inner errors
 pub enum GtError {
-    CannotWriteEvent(std::io::Error),
+    EventWriteError(std::io::Error),
     ChildThreadPanicked(std::io::Error),
+    ChannelRecvError(RecvError)
 }
 
 impl From<std::io::Error> for GtError {
 
     fn from(err: std::io::Error) -> Self {
-        GtError::CannotWriteEvent(err)
+        GtError::EventWriteError(err)
+    }
+}
+
+impl From<VtpError> for GtError {
+    fn from(err: VtpError) -> Self {
+        match err {
+            VtpError::EventWriteError(ioe) => GtError::EventWriteError(ioe), 
+            VtpError::ChannelRecvError(RecvError) => GtError::ChannelRecvError(RecvError)
+        }
     }
 }
 
@@ -96,8 +106,8 @@ impl TaskHandle {
 }
 
 pub struct GestureTranslator<'ex> {
-    vtp: Arc<VirtualTrackpad>,
-    configs: Arc<Configuration>,
+    vtp: VirtualTrackpad,
+    configs: Configuration,
     rt_exec: smol::Executor<'ex>,
     mud_child: TaskHandle,  // mouse_up_delay child
     mouse_is_down: bool     // easier to track here than in VTP, due to Arcs/borrows
@@ -112,9 +122,9 @@ impl<'a> GestureTranslator<'a> {
     ) -> GestureTranslator<'a> {
         
         GestureTranslator {
-            vtp: Arc::new(vtp),
+            vtp,
             rt_exec,
-            configs: Arc::new(cfg),
+            configs: cfg,
             mud_child: TaskHandle::default(),
             mouse_is_down: false
         }
@@ -137,14 +147,14 @@ impl<'a> GestureTranslator<'a> {
                     },
                     _ => {
                         debug!("not matched on Swipe or Hold");
-                        self.mouse_up_now()
+                        self.mouse_up()
                     } // just in case, so the drag isn't locked
                 }
             }
             //Event::Pointer(pointer_ev) => self.handle_pointer_ev(pointer_ev),
             _ => {
                 debug!("not matched on Gesture or Pointer");
-                self.mouse_up_now()
+                self.mouse_up()
             }
         }
     }
@@ -171,12 +181,14 @@ impl<'a> GestureTranslator<'a> {
                 // (see `src/benches/cloning.rs` for a demo).
                 let vtp_arc = self.vtp.clone();
                 let delay = self.configs.drag_end_delay.clone();
-
-                self.mud_child.task = self.rt_exec.spawn(async move {
+                
+                let f = async move {
                     vtp_arc
                         .mouse_up_delay(delay)
+                        .await
                         .map_err(GtError::from)
-                });
+                };
+                self.mud_child.task = self.rt_exec.spawn(f);
                 debug!(
                     "runtime is empty after fork (from handle_hold): {}", 
                     self.rt_exec.is_empty()
@@ -184,7 +196,7 @@ impl<'a> GestureTranslator<'a> {
                 
                 Ok(())
             },
-            _ => self.mouse_up_now()
+            _ => self.mouse_up()
         }
     }
 
@@ -192,7 +204,7 @@ impl<'a> GestureTranslator<'a> {
     fn handle_swipe(&mut self, swipe_ev: GestureSwipeEvent) -> Result<(), GtError> {
         debug!("handling swipe");
         if swipe_ev.finger_count() != 3 { 
-            return self.mouse_up_now();
+            return self.mouse_up();
         }
         match swipe_ev {
             GestureSwipeEvent::Update(swipe_update) => self.handle_swipe_update(swipe_update),
@@ -209,6 +221,7 @@ impl<'a> GestureTranslator<'a> {
                 self.mud_child.task = self.rt_exec.spawn(async move {
                     vtp_arc
                         .mouse_up_delay(delay)
+                        .await
                         .map_err(GtError::from)
                 });
 
@@ -218,7 +231,7 @@ impl<'a> GestureTranslator<'a> {
                 );
                 Ok(())
             },
-            _ => self.mouse_up_now()
+            _ => self.mouse_up()
         }
     }
 
@@ -249,7 +262,7 @@ impl<'a> GestureTranslator<'a> {
         match p_ev {
             PointerEvent::Motion(mot_ev) => {
                 
-                if !self.mouse_is_down { return self.mouse_up_now(); }
+                if !self.mouse_is_down { return self.mouse_up(); }
                 
                 let (dx, dy) = (
                     mot_ev.dx_unaccelerated(), 
@@ -269,7 +282,7 @@ impl<'a> GestureTranslator<'a> {
 
                 Ok(())
             },
-            _ => self.mouse_up_now()
+            _ => self.mouse_up()
         }
     }
 

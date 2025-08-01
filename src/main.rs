@@ -1,12 +1,13 @@
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+use std::sync::{atomic::{AtomicBool, Ordering}, mpsc::channel, Arc};
 use signal_hook::{self, consts::{SIGINT, SIGTERM}};
+use smol::channel::{self, Sender, Receiver};
 #[macro_use] extern crate log;
 
 use linux_3_finger_drag::{
     init::{config, libinput_init},
     runtime::{
         event_handler::{GestureTranslator, GtError},
-        virtual_trackpad
+        event_handler::GtError, virtual_trackpad
     },
     
 };
@@ -46,7 +47,8 @@ fn main() -> Result<(), GtError> {
     signal_hook::flag::register(SIGINT, Arc::clone(&should_exit)).unwrap();
 
 
-    let vtrackpad = virtual_trackpad::start_handler()?;
+    let (sender, recvr) = channel::unbounded::<input::Event>();
+    let vtrackpad = virtual_trackpad::start_handler(recvr)?;
     let vtp_clone = vtrackpad.clone();
 
     info!("Searching for the trackpad on your device...");
@@ -64,8 +66,6 @@ fn main() -> Result<(), GtError> {
             let mut translator = GestureTranslator::new(vtp_clone, configs.clone(), runtime_exec);
             
             loop {
-
-                //debug!("starting loop...");
                 // this is to keep the infinite loop from filling out into
                 // entire CPU core, which it will do even on no-ops.
                 // This refresh rate (once per 5ms) should be sufficient 
@@ -87,16 +87,14 @@ fn main() -> Result<(), GtError> {
 
                 for event in &mut real_trackpad {
 
-                    // match event {
-                    //     input::Event::Gesture(g) => {
-                    //         debug!("recv'd gesture event");
-                    //         match g {
-                    //             _ => debug!("not gestureHold event received: {:?}", g)
-                    //         }
-                    //     },
-                    //     _ => debug!("not gesture event received: {:?}", event)
-                    // }
-                    
+                    smol::block_on(async {
+                        sender.send(event).await
+                    })?;
+
+                    runtime_exec.spawn(async {
+                        recvr.recv().await
+                    })?;
+
                     // do nothing on success (or ignored gesture)
                     if let Err(e) = translator.translate_gesture(event) {
 
