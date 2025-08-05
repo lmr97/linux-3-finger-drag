@@ -210,7 +210,9 @@ This toggles whether the delay for drag ending delay, configured by `dragEndDela
 
 - pointer motion
 
-Setting this value to `false` means that no gesture cancels the drag end delay, so any gesture that moves the mouse moves the drag as well. This can be useful if you want to continue three-finger drags using only one finger for the duration of `dragEndDelay` (after which the dragging ends without another three-finger gesture). Defaults to `true`.
+Setting this value to `false` means that no gesture cancels the drag end delay, so any gesture that moves the mouse moves the drag as well. This can be useful if you want to continue three-finger drags using only one finger for the duration of `dragEndDelay` (after which the dragging ends without another three-finger gesture). 
+
+If `dragEndDelay` is 0, this setting has no effect. Defaults to `true`.
 
 ### `dragEndDelay` (int)
 This is the time (in milliseconds) that the mouse hold will persist for after you lift your fingers (to give you a moment to reposition your fingers). Defaults to 0.
