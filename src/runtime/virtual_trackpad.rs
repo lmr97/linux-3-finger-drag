@@ -7,10 +7,12 @@
 use std::{
     fs::{File, OpenOptions},
     os::{fd::AsFd, unix::fs::OpenOptionsExt},
+    sync::Arc,
+    //sync::mpsc::{Receiver, RecvError},
     time::{self, Duration},
     thread
 };
-use smol::channel::{Receiver, RecvError};
+use smol::{channel::{Receiver, RecvError}, future::FutureExt};
 use input_linux::{
     EventKind, EventTime, 
     InputEvent, InputId, 
@@ -19,13 +21,11 @@ use input_linux::{
     SynchronizeEvent, SynchronizeKind, 
     UInputHandle
 };
-use input::{
-    event::{
-        gesture::GestureEventTrait, PointerEvent
-    }, Event
-};
+
 use nix::libc::O_NONBLOCK;
 use log::{debug, error};
+
+use crate::runtime::event_handler::CancelMouseUpDelay;
 
 pub enum VtpError {
     EventWriteError(std::io::Error), 
@@ -44,7 +44,21 @@ impl From<RecvError> for VtpError {
     }
 }
 
-pub fn start_handler(rx: Receiver<input::Event>) -> Result<VirtualTrackpad, std::io::Error> {
+
+/// This struct is stateless: no position or mouse state is available.
+/// This is due to issues that arise from mutability in a mulit-thread
+/// context. If state is required, a wrapper struct will need to be
+/// created, or tracked externally somehow. 
+pub struct VirtualTrackpad {
+    handle: UInputHandle<File>,
+    rx: Arc<Receiver<CancelMouseUpDelay>>,
+    pub mouse_is_down: bool
+}
+
+
+// Move receiver into start_handler, keep it in the struct by reference,
+// so it can be cloned
+pub fn start_handler(rx: Receiver<CancelMouseUpDelay>) -> Result<VirtualTrackpad, std::io::Error> {
     let uinput_file_res = OpenOptions::new()
         .read(true)
         .write(true)
@@ -94,92 +108,16 @@ pub fn start_handler(rx: Receiver<input::Event>) -> Result<VirtualTrackpad, std:
     // may be needed to let the system catch up
     thread::sleep(time::Duration::from_millis(500));
 
-    Ok(VirtualTrackpad { handle: uhandle, rx })
-
-}
-
-
-// dragEndDelay time should be cut short by a pointer or scoll gesture;
-// this function listens on the channel for either a pointer button press,
-// a scoll event, or a non-3-finger gesture, and exits when it gets one
-pub async fn listen_for_delay_cancel_event(rx: Receiver<Event>) -> Result<bool, RecvError> {
-
-    loop {
-        let ev = rx.recv().await?;
-        match ev {
-            Event::Pointer(ptr_ev) => {
-                match ptr_ev {
-                    PointerEvent::Button(_) 
-                    | PointerEvent::ScrollFinger(_) => return Ok(true),
-                    _ => {}
-                }
-            },
-            Event::Gesture(gstr_ev) => {
-                if gstr_ev.finger_count() < 3 {
-                    return Ok(true);
-                }
-            }
-            _ => {}
+    Ok(
+        VirtualTrackpad { 
+            handle: uhandle, 
+            rx: Arc::new(rx), 
+            mouse_is_down: false
         }
-    }
+    )
+
 }
 
-
-// delay is in milliseconds
-pub async fn mouse_up_delay(handle: UInputHandle<File>, rx: Receiver<Event>, delay: Duration) -> Result<(), VtpError> {
-    
-    // wait out the duration, unless a pointer click or scoll event
-    // is received on the channel (`self.rx`)
-    let cancelled = smol::future::race(
-        async {
-            thread::sleep(delay); 
-            Ok(false)
-        }, 
-        listen_for_delay_cancel_event(rx)
-    ).await?;
-
-    if cancelled { return Ok(()); }
-
-    let events = [
-        InputEvent::from(
-            KeyEvent::new(
-                VirtualTrackpad::ZERO, 
-                Key::ButtonLeft, 
-                KeyState::pressed(false))
-            ).into_raw(),
-        InputEvent::from(
-            SynchronizeEvent::new(
-                VirtualTrackpad::ZERO, 
-                SynchronizeKind::Report, 
-                0)
-            ).into_raw(),
-    ];
-    handle.write(&events)?;
-    Ok(())
-}
-
-
-pub fn clone_handle(handle: UInputHandle<File>) -> UInputHandle<File> {
-    let fd = handle
-        .as_fd()
-        .try_clone_to_owned()
-        .expect(
-            "uinput file descriptor could not be duplicated, \
-            likely do to hitting the maximum open file descriptors \
-            for this OS."
-    );
-
-    UInputHandle::new(File::from(fd))
-}
-
-/// This struct is stateless: no position or mouse state is available.
-/// This is due to issues that arise from mutability in a mulit-thread
-/// context. If state is required, a wrapper struct will need to be
-/// created, or tracked externally somehow. 
-pub struct VirtualTrackpad {
-    pub handle: UInputHandle<File>,
-    rx: Receiver<input::Event>
-}
 
 impl Clone for VirtualTrackpad {
     /// This clone() can theoretically panic since there is an expect() in 
@@ -204,16 +142,22 @@ impl Clone for VirtualTrackpad {
 
         VirtualTrackpad {
             handle: UInputHandle::new(File::from(fd)),
-            rx: self.rx.clone()
+            rx: Arc::clone(&self.rx),
+            mouse_is_down: self.mouse_is_down
         }
     }
 }
-unsafe impl Send for VirtualTrackpad{}
+
+async fn timeout(delay: Duration) -> Result<bool, RecvError>{
+    smol::Timer::after(delay).await;
+    Ok(false)
+}
+
 impl VirtualTrackpad
 {
     const ZERO: EventTime = EventTime::new(0, 0);
 
-    pub fn mouse_down(&self) -> Result<(), std::io::Error> {
+    pub fn mouse_down(&mut self) -> Result<(), std::io::Error> {
         let events = [
             InputEvent::from(
                 KeyEvent::new(
@@ -229,10 +173,11 @@ impl VirtualTrackpad
                 ).into_raw(),
         ];
         self.handle.write(&events)?;
+        self.mouse_is_down = true;
         Ok(())
     }
 
-    pub fn mouse_up(&self) -> Result<(), std::io::Error> {   
+    pub fn mouse_up(&mut self) -> Result<(), std::io::Error> {   
 
         let events = [
             InputEvent::from(
@@ -248,25 +193,19 @@ impl VirtualTrackpad
                     0)
                 ).into_raw(),
         ];
-
         self.handle.write(&events)?;
+        self.mouse_is_down = false;
         Ok(())
     }
 
     // delay is in milliseconds
-    pub async fn mouse_up_delay(&self, delay: Duration) -> Result<(), VtpError> {
+    pub async fn mouse_up_delay(&mut self, delay: Duration) -> Result<(), VtpError> {
         
-        // wait out the duration, unless a pointer click or scoll event
+        // wait out the duration, unless a cancellation signal
         // is received on the channel (`self.rx`)
-        // wait out the duration, unless a pointer click or scoll event
-        // is received on the channel (`self.rx`)
-        let cancelled = smol::future::race(
-            async {
-                thread::sleep(delay); 
-                Ok(false)
-            }, 
-            self.listen_for_delay_cancel_event()
-        ).await?;
+        let cancelled = timeout(delay)
+            .or(self.listen_for_delay_cancel_event())
+            .await?;
 
         if cancelled { return Ok(()); }
 
@@ -285,8 +224,10 @@ impl VirtualTrackpad
                 ).into_raw(),
         ];
         self.handle.write(&events)?;
+        self.mouse_is_down = false;
         Ok(())
     }
+
 
     pub fn mouse_move_relative(&self, x_rel: f64, y_rel:f64) -> Result<(), std::io::Error> {
         
@@ -341,26 +282,14 @@ impl VirtualTrackpad
     // dragEndDelay time should be cut short by a pointer or scoll gesture;
     // this function listens on the channel for either a pointer button press,
     // a scoll event, or a non-3-finger gesture, and exits when it gets one
-    pub async fn listen_for_delay_cancel_event(&self) -> Result<bool, RecvError> {
+    async fn listen_for_delay_cancel_event(&self) -> Result<bool, RecvError> {
 
-        loop {
-            let ev = self.rx.recv().await?;
-            match ev {
-                Event::Pointer(ptr_ev) => {
-                    match ptr_ev {
-                        PointerEvent::Button(_) 
-                        | PointerEvent::ScrollFinger(_) => return Ok(true),
-                        _ => {}
-                    }
-                },
-                Event::Gesture(gstr_ev) => {
-                    if gstr_ev.finger_count() < 3 {
-                        return Ok(true);
-                    }
-                }
-                _ => {}
-            }
-        }
+        // function blocks until signal is received
+        // since CancelMouseUpDelay is the only thing
+        // ever sent in the channel, there's no need to
+        // check that that's what we received
+        let _ = self.rx.recv().await?;
+        Ok(true)
     }
 
 
