@@ -1,13 +1,11 @@
-use std::any::Any;
-use std::io::ErrorKind;
 use std::mem;
-use std::sync::{Arc, PoisonError, MutexGuard};
-use smol::{Task, channel::RecvError};
+use smol::Task;
+use smol::channel::{RecvError, SendError, Sender};
 use input::{
     Event,
     event::{
         gesture::{
-        GestureEvent, 
+            GestureEvent, 
             GestureEventCoordinates,
             GestureEventTrait,
             GestureHoldEvent,
@@ -24,7 +22,8 @@ use log::debug;
 use super::virtual_trackpad::{VirtualTrackpad, VtpError};
 use super::super::init::config::Configuration;
 
-type MutexPoisonError<'e> = PoisonError<MutexGuard<'e, Arc<VirtualTrackpad>>>;
+// the "signal" to send into channel to cancel 
+pub struct CancelMouseUpDelay;
 
 // (G)esture (T)ranslation Error
 #[derive(Debug)]
@@ -32,7 +31,8 @@ type MutexPoisonError<'e> = PoisonError<MutexGuard<'e, Arc<VirtualTrackpad>>>;
 pub enum GtError {
     EventWriteError(std::io::Error),
     ChildThreadPanicked(std::io::Error),
-    ChannelRecvError(RecvError)
+    ChannelRecvError(RecvError),
+    ChannelSendError(SendError<CancelMouseUpDelay>)
 }
 
 impl From<std::io::Error> for GtError {
@@ -51,66 +51,20 @@ impl From<VtpError> for GtError {
     }
 }
 
-impl From<MutexPoisonError<'_>> for GtError {
+impl From<SendError<CancelMouseUpDelay>> for GtError {
 
-    fn from(err: MutexPoisonError<'_>) -> Self {
-
-        let err_msg = format!(
-            "Mutex was poisoned (a locking thread panicked): {:?}", err
-        );
-
-        let recast_err = std::io::Error::new(
-            ErrorKind::Other,
-            err_msg
-        );
-
-        GtError::ChildThreadPanicked(recast_err)
-    }
+    fn from(err: SendError<CancelMouseUpDelay>) -> Self {
+        GtError::ChannelSendError(err)
+    } 
 }
 
-
-struct TaskHandle { task: Task<Result<(), GtError>> }
-
-impl Default for TaskHandle {
-    fn default() -> Self {
-        TaskHandle {
-            task: smol::spawn(async { 
-                Ok(()) 
-            })
-        }
-    }
-}
-
-impl TaskHandle {
-    // executing a block_on runtime from the main thread causes a 
-    // deadlock
-    fn cancel(self) -> Option<Result<(), GtError>> {
-        smol::block_on(async move {
-            
-            debug!("Got into cancelation runtime");
-            if self.task.is_finished() { 
-                debug!(
-                    "Task was found to be already finished in \
-                    cancellation runtime, exiting runtime..."
-                );
-                return Some(Ok(())); 
-            }
-            
-            let opt_res = self.task.cancel().await;
-            debug!("Option received: {:?}", opt_res);
-            debug!("Cancellation complete!");
-            
-            opt_res
-        })
-    }
-}
 
 pub struct GestureTranslator<'ex> {
     vtp: VirtualTrackpad,
     configs: Configuration,
     rt_exec: smol::Executor<'ex>,
-    mud_child: TaskHandle,  // mouse_up_delay child
-    mouse_is_down: bool     // easier to track here than in VTP, due to Arcs/borrows
+    mud_child: Task<Result<(), GtError>>,   // mouse_up_delay child
+    tx: Sender<CancelMouseUpDelay>
 }
 
 impl<'a> GestureTranslator<'a> {
@@ -118,43 +72,107 @@ impl<'a> GestureTranslator<'a> {
     pub fn new(
         vtp: VirtualTrackpad, 
         cfg: Configuration, 
-        rt_exec: smol::Executor<'a>
+        rt_exec: smol::Executor<'a>,
+        tx: Sender<CancelMouseUpDelay>
     ) -> GestureTranslator<'a> {
-        
+
+        // placeholder inital value. better than using an Option in 
+        // my opinion, since it saves on match expressions in a module 
+        // already stuffed to the brim with them, increasing readability.
+        let empty_task = rt_exec.spawn(
+            async { Ok(()) }
+        );
+
         GestureTranslator {
             vtp,
             rt_exec,
             configs: cfg,
-            mud_child: TaskHandle::default(),
-            mouse_is_down: false
+            mud_child: empty_task,
+            tx
         }
     }
 
-    pub fn translate_gesture(&mut self, event: Event) -> Result<(), GtError> {
+    pub async fn translate_gesture(&mut self, event: Event) -> Result<(), GtError> {
 
         debug!("Event received: {:?}", event);
+
+        // check if the current event is worth sending a cancel signal in a channel 
+        // to VirtualTrackpad::mouse_up_delay(), which is possibly running in another thread
+        self.check_for_delay_cancelling_event(&event).await?;
+
+        // Await mouse_up_delay task spawned in previous iteration, so as not to have 
+        // multiple threads handling the mouse up delay. See method for details.
+        debug!("Awaiting previous iteration's forked task...");
+        self.get_task().await?;
+        debug!("Previous iteration's task complete!");
+
         match event {
             Event::Gesture(gest_ev) => {
                 debug!("Handling gesture event");
-                debug!("Type of gesture event is GestureHoldEvent: {}", std::any::TypeId::of::<GestureHoldEvent>() == gest_ev.type_id());
                 debug!("Number of fingers in gesture: {}", gest_ev.finger_count());
-           
+                
+                if gest_ev.finger_count() != 3 { 
+                    debug!("Gesture is not three-fingered, ignoring");
+                    return self.mouse_up();
+                }
+                
                 match gest_ev {
                     GestureEvent::Swipe(swipe_ev) => self.handle_swipe(swipe_ev),
-                    GestureEvent::Hold(gest_hold_ev) => {
-                        debug!("FOUND HOLD EVENT!");
-                        self.handle_hold(gest_hold_ev)
-                    },
-                    _ => {
-                        debug!("not matched on Swipe or Hold");
-                        self.mouse_up()
-                    } // just in case, so the drag isn't locked
+                    GestureEvent::Hold(gest_hold_ev) => self.handle_hold(gest_hold_ev),
+                    _ => self.mouse_up() // just in case, so the drag isn't locked
                 }
+            },
+            _ => self.mouse_up()
+        }
+    }
+
+
+    /// Since the task was spawned in the `GestureTranslator` struct's runtime,
+    /// it needs to be awaited within that runtime, not the runtime in 
+    /// `main`.
+    /// 
+    /// Since `await`ing the task would move it out of the shared reference to 
+    /// the `GestureTranslator` struct, and I need the struct to remain a shared 
+    /// reference to use between loop iterations in `main`, I can only access 
+    /// the task handle by swapping references between the original task handle 
+    /// and a dummy task (which simply returns `Ok(())`, effectively resetting it.
+    async fn get_task(&mut self) -> Result<(), GtError> { 
+
+        let mut existing_task = self.rt_exec.spawn(async { Ok(()) });
+        
+        mem::swap(&mut self.mud_child, &mut existing_task);
+        
+        self.rt_exec.run(existing_task).await
+    }
+
+
+    /// Check for the kinds of events that will cancel a drag end delay.
+    /// There has got to be a better name for this function.
+    async fn check_for_delay_cancelling_event(&self, ev: &Event) -> Result<(), SendError<CancelMouseUpDelay>>{
+        
+        // check whether cancellation-worthy events are detected,
+        // send the signal into the channel if so
+        debug!("Blocking in send_cancel_signal()");
+        match ev {
+            Event::Pointer(ptr_ev) => {
+                match ptr_ev {
+                    PointerEvent::Button(_) | PointerEvent::ScrollFinger(_) => {
+                        self.send_cancel_signal().await
+                    },
+                    _ => Ok(())
+                }
+            },
+            Event::Gesture(gstr_ev) => {
+
+                if gstr_ev.finger_count() < 3 {
+                    return self.send_cancel_signal().await;
+                }
+
+                Ok(())
             }
-            //Event::Pointer(pointer_ev) => self.handle_pointer_ev(pointer_ev),
             _ => {
-                debug!("not matched on Gesture or Pointer");
-                self.mouse_up()
+                debug!("didn't find cancel-worthy event");
+                Ok(())
             }
         }
     }
@@ -162,39 +180,16 @@ impl<'a> GestureTranslator<'a> {
 
     fn handle_hold(&mut self, gest_hold_ev: GestureHoldEvent) -> Result<(), GtError> {
 
-        debug!("IN HOLD HANDLER");
+        debug!("handling hold");
+
         match gest_hold_ev {
             GestureHoldEvent::Begin(_) => self.mouse_down(),
             GestureHoldEvent::End(_) => {
 
-                if self.configs.drag_end_delay.is_zero() { 
-                    return self.mouse_up();
-                }
+                // don't waste time forking if there's no delay
+                if self.configs.drag_end_delay.is_zero() { return self.mouse_up(); }
 
-                // these are cheap clones; `VirtualTrackpad`'s clone is simply
-                // duplicating a file descriptor (thin wrapper over 1 libc function) 
-                // and `Configuration`'s clone is on a small struct of small data
-                // the largest is a `std::time::Duration`. Both these clones together
-                // only add less than a microsecond to each iteration, and when the 
-                // the usual response set in the main loop is 5ms -- >5000x longer --
-                // the time taken cloning will make practically no difference.
-                // (see `src/benches/cloning.rs` for a demo).
-                let vtp_arc = self.vtp.clone();
-                let delay = self.configs.drag_end_delay.clone();
-                
-                let f = async move {
-                    vtp_arc
-                        .mouse_up_delay(delay)
-                        .await
-                        .map_err(GtError::from)
-                };
-                self.mud_child.task = self.rt_exec.spawn(f);
-                debug!(
-                    "runtime is empty after fork (from handle_hold): {}", 
-                    self.rt_exec.is_empty()
-                );
-                
-                Ok(())
+                self.fork_mouse_up_delay()
             },
             _ => self.mouse_up()
         }
@@ -202,34 +197,18 @@ impl<'a> GestureTranslator<'a> {
 
 
     fn handle_swipe(&mut self, swipe_ev: GestureSwipeEvent) -> Result<(), GtError> {
+        
         debug!("handling swipe");
-        if swipe_ev.finger_count() != 3 { 
-            return self.mouse_up();
-        }
+        
         match swipe_ev {
             GestureSwipeEvent::Update(swipe_update) => self.handle_swipe_update(swipe_update),
-            GestureSwipeEvent::Begin(_) => {debug!("handling GestureSwipeBegin"); self.mouse_down()},
+            GestureSwipeEvent::Begin(_) => self.mouse_down(),
             GestureSwipeEvent::End(_)   => {
                 
-                if self.configs.drag_end_delay.is_zero() { 
-                    return self.mouse_up();
-                }
+                // don't waste time forking if there's no delay
+                if self.configs.drag_end_delay.is_zero() { return self.mouse_up(); }
 
-                let vtp_arc = self.vtp.clone();
-                let delay = self.configs.drag_end_delay.clone();
-
-                self.mud_child.task = self.rt_exec.spawn(async move {
-                    vtp_arc
-                        .mouse_up_delay(delay)
-                        .await
-                        .map_err(GtError::from)
-                });
-
-                debug!(
-                    "runtime is empty after fork (from handle_swipe): {}", 
-                    self.rt_exec.is_empty()
-                );
-                Ok(())
+                self.fork_mouse_up_delay()
             },
             _ => self.mouse_up()
         }
@@ -237,6 +216,8 @@ impl<'a> GestureTranslator<'a> {
 
 
     fn handle_swipe_update(&self, swipe_update: GestureSwipeUpdateEvent) -> Result<(), GtError> {
+        
+        debug!("handling GestureSwipeUpdate"); 
         
         let (dx, dy) = (
             swipe_update.dx_unaccelerated(), 
@@ -258,63 +239,53 @@ impl<'a> GestureTranslator<'a> {
     }
 
 
-    fn handle_pointer_ev(&mut self, p_ev: PointerEvent) -> Result<(), GtError> {
-        match p_ev {
-            PointerEvent::Motion(mot_ev) => {
-                
-                if !self.mouse_is_down { return self.mouse_up(); }
-                
-                let (dx, dy) = (
-                    mot_ev.dx_unaccelerated(), 
-                    mot_ev.dy_unaccelerated()
-                );
+    fn fork_mouse_up_delay(&mut self) -> Result<(), GtError> {
 
-                // Ignore tiny motions. This helps reduce drift.
-                if dx.abs() < self.configs.min_motion 
-                && dy.abs() < self.configs.min_motion {
-                    return Ok(());
-                }
-
-                self.vtp.mouse_move_relative(
-                    dx * self.configs.acceleration, 
-                    dy * self.configs.acceleration
-                )?;
-
-                Ok(())
-            },
-            _ => self.mouse_up()
-        }
+        // these are cheap clones; `VirtualTrackpad`'s clone is simply
+        // duplicating a file descriptor (thin wrapper over 1 libc function) 
+        // and getting another reference to the same channel receiver, 
+        // and I'm only cloning the `std::time::Duration` part of the config.
+        //
+        // Both these clones together only add less than a microsecond to each 
+        // iteration, which nothing when the usual response set in the main loop is 5ms 
+        // -- more than 5000x longer. Run `cargo bench` for a demo. 
+        let mut vtp_arc = self.vtp.clone();
+        let delay = self.configs.drag_end_delay.clone();
+        
+        self.mud_child = self.rt_exec.spawn(async move {
+            vtp_arc
+                .mouse_up_delay(delay)
+                .await
+                .map_err(GtError::from)
+        });
+        
+        debug!(
+            "GestureTranslator runtime contains fork now: {}", 
+            !self.rt_exec.is_empty()
+        );
+        
+        Ok(())
     }
+
 
     /* Wrapper functions */
     
     fn mouse_down(&mut self) -> Result<(), GtError> {
         debug!("mouse_down called");
-        self.mouse_is_down = true;
+        self.vtp.mouse_is_down = true;
         self.vtp.mouse_down().map_err(GtError::from)
     }
 
 
     fn mouse_up(&mut self) -> Result<(), GtError> {
         debug!("vanilla mouse_up called");
-        self.mouse_is_down = false;
+        self.vtp.mouse_is_down = false;
         self.vtp.mouse_up().map_err(GtError::from)
     }
 
-    #[track_caller]
-    fn mouse_up_now(&mut self) -> Result<(), GtError> {
-        debug!("Caller: {:?}", std::panic::Location::caller().line());
-        debug!("Starting cancel of mouse_up_delay...");
-        let mud_child = mem::take(&mut self.mud_child);
-        debug!("Task is finished: {}", mud_child.task.is_finished());
-        
-        let cancel_res = match mud_child.cancel() {
-            Some(res) => res,
-            None => Ok(())
-        };
-        debug!("runtime is empty after cancel: {}", self.rt_exec.is_empty());
-        self.mouse_up()?;
-
-        cancel_res
+    async fn send_cancel_signal(&self) -> Result<(), SendError<CancelMouseUpDelay>> {
+        self.rt_exec.run(
+            self.tx.send(CancelMouseUpDelay)
+        ).await
     }
 }
