@@ -29,6 +29,7 @@ OS | Version | Desktop Enviroment | Verified
 - [Configuration](#configuration)
   - [Set up](#Set-up-configuration)
   - [acceleration](#acceleration-float)
+  - [dragDelayCancellable](#dragdelaycancellable-bool)
   - [dragEndDelay](#dragenddelay-int)
   - [logFile](#logfile-string)
   - [logLevel](#loglevel-string)
@@ -199,7 +200,17 @@ Below are the fields that can be configured, with the values given here being th
 If the JSON is malformed in the found configuration file, or the file is simply not found, the defaults listed above are loaded instead, and the program continues execution. 
 
 ### `acceleration` (float)
-This is a speedup multiplier which will be applied to all 3-finger gesture movements. Defaults to 1.0.
+This is a speedup multiplier which will be applied to all 3-finger gesture movements. Defaults to `1.0`.
+
+### `dragDelayCancellable` (bool)
+
+This toggles whether the delay for drag ending delay, configured by `dragEndDelay`, should be cancelled early or not upon certain gestures, mirroring the behavior found in MacBooks when using three-finger-dragging. The gestures that can cancel the delay are:
+
+- a non-three-finger gesture
+
+- pointer motion
+
+Defaults to `true`.
 
 ### `dragEndDelay` (int)
 This is the time (in milliseconds) that the mouse hold will persist for after you lift your fingers (to give you a moment to reposition your fingers). Defaults to 0.
