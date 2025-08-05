@@ -96,9 +96,14 @@ impl<'a> GestureTranslator<'a> {
 
         debug!("Event received: {:?}", event);
 
-        // check if the current event is worth sending a cancel signal in a channel 
-        // to VirtualTrackpad::mouse_up_delay(), which is possibly running in another thread
-        self.check_for_delay_cancelling_event(&event).await?;
+        // early cancel of drag_end_delay is cfg'able.
+        // if we don't check for the events that cancel it, no cancel 
+        // signal will be sent, and the timer will run out naturally.
+        if self.configs.drag_delay_cancellable {
+            // check if the current event is worth sending a cancel signal in a channel 
+            // to VirtualTrackpad::mouse_up_delay(), which is possibly running in another thread
+            self.check_for_delay_cancelling_event(&event).await?;
+        }
 
         // Await mouse_up_delay task spawned in previous iteration, so as not to have 
         // multiple threads handling the mouse up delay. See method for details.

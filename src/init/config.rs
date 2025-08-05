@@ -52,6 +52,9 @@ pub struct Configuration {
     #[serde(default = "default_1")]
     pub acceleration: f64,
 
+    #[serde(default = "default_true")]
+    pub drag_delay_cancellable: bool,
+
     #[serde(default = "default_0ms")]
     #[serde_as(as = "serde_with::DurationMilliSeconds<u64>")]
     pub drag_end_delay: Duration,       // in milliseconds
@@ -74,6 +77,7 @@ impl Default for Configuration {
     fn default() -> Self {
         Configuration {
             acceleration: 1.0,
+            drag_delay_cancellable: true,
             drag_end_delay: Duration::from_millis(0),
             min_motion: 0.2,
             response_time: Duration::from_millis(5),
@@ -88,6 +92,7 @@ impl Default for Configuration {
 // subject. Using functions to yield the values is the only 
 // accepted way.
 fn default_1()      -> f64      { 1.0 }
+fn default_true()   -> bool     { true }
 fn default_0ms()    -> Duration { Duration::from_millis(0) }
 fn default_5ms()    -> Duration { Duration::from_millis(5) }
 fn default_pt_two() -> f64      { 0.2 }
