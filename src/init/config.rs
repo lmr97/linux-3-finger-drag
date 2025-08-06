@@ -52,12 +52,12 @@ pub struct Configuration {
     #[serde(default = "default_1")]
     pub acceleration: f64,
 
-    #[serde(default = "default_true")]
-    pub drag_delay_cancellable: bool,
-
     #[serde(default = "default_0ms")]
     #[serde_as(as = "serde_with::DurationMilliSeconds<u64>")]
     pub drag_end_delay: Duration,       // in milliseconds
+
+    #[serde(default = "default_true")]
+    pub drag_end_delay_cancellable: bool,
 
     #[serde(default = "default_pt_two")]
     pub min_motion: f64,
@@ -77,8 +77,8 @@ impl Default for Configuration {
     fn default() -> Self {
         Configuration {
             acceleration: 1.0,
-            drag_delay_cancellable: true,
             drag_end_delay: Duration::from_millis(0),
+            drag_end_delay_cancellable: true,
             min_motion: 0.2,
             response_time: Duration::from_millis(5),
             log_file: "stdout".to_string(),
