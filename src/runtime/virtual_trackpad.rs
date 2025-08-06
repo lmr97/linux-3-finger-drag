@@ -118,20 +118,29 @@ pub fn start_handler(rx: Receiver<CancelMouseUpDelay>) -> Result<VirtualTrackpad
 
 }
 
+async fn timeout(delay: Duration) -> Result<(), RecvError>{
+    smol::Timer::after(delay).await;
+    debug!("Delay completed fully");
+    Ok(())
+}
 
 impl Clone for VirtualTrackpad {
     /// This clone() can theoretically panic since there is an expect() in 
     /// its definition. This is because `try_cloned_to_owned`, from `std::io`,
-    /// utilizes libc's `fnctl`, which will only fail if there is the maximum
-    /// number of file descriptors to be opened is reached (or if the args
-    /// to it are invalid, but the Rust method takes no arguments except for
-    /// a known-valid FD, so the rest are controlled by the std library).
+    /// utilizes libc's `fnctl`, which can fail, but will only do so if the 
+    /// duplicating the file descriptor would exceed the maximum number of 
+    /// file descriptors to be opened (or if the arguments to it are invalid, 
+    /// but the Rust method takes no arguments except for a known-valid FD, 
+    /// so those arguments are controlled by the std library).
     /// 
-    /// This makes it as safe as any other function to call, since it only fails
-    /// when there is a resource limitation issue (which would be a rare and 
-    /// system-wide problem).
+    /// This makes it as safe as any other file-system function to call, since 
+    /// it only fails when there is a resource limitation issue (which would be 
+    /// a rare and system-wide problem).
+    /// 
+    /// Note that the boolean `mouse_is_down` is *copied*, **not** passed by 
+    /// reference, for simplicity. 
     fn clone(&self) -> Self {
-        let fd = self.handle
+        let uinput_fd = self.handle
             .as_fd()
             .try_clone_to_owned()
             .expect(
@@ -141,17 +150,13 @@ impl Clone for VirtualTrackpad {
         );
 
         VirtualTrackpad {
-            handle: UInputHandle::new(File::from(fd)),
+            handle: UInputHandle::new(File::from(uinput_fd)),
             rx: Arc::clone(&self.rx),
             mouse_is_down: self.mouse_is_down
         }
     }
 }
 
-async fn timeout(delay: Duration) -> Result<bool, RecvError>{
-    smol::Timer::after(delay).await;
-    Ok(false)
-}
 
 impl VirtualTrackpad
 {
@@ -198,16 +203,23 @@ impl VirtualTrackpad
         Ok(())
     }
 
-    // delay is in milliseconds
+    ///  This function waits for `delay`, or a cancellation signal (see 
+    /// `event_handler::GestureTranslator::check_for_delay_cancelling_event`
+    /// for details) and then sets the left-click button "up" (i.e. `!pressed`). 
+    /// after whichever happens first.
+    /// 
+    /// Any errors that occur here get propagated through the 
+    /// `await`s up to the main runtime. 
+    /// 
+    /// `delay` is measured in milliseconds.
     pub async fn mouse_up_delay(&mut self, delay: Duration) -> Result<(), VtpError> {
         
+        debug!("inside mouse_up_delay");
         // wait out the duration, unless a cancellation signal
-        // is received on the channel (`self.rx`)
-        let cancelled = timeout(delay)
+        // is received on the channel (via `self.rx`)
+        timeout(delay)
             .or(self.listen_for_delay_cancel_event())
             .await?;
-
-        if cancelled { return Ok(()); }
 
         let events = [
             InputEvent::from(
@@ -224,6 +236,9 @@ impl VirtualTrackpad
                 ).into_raw(),
         ];
         self.handle.write(&events)?;
+
+        debug!("mouse_up written after delay");
+
         self.mouse_is_down = false;
         Ok(())
     }
@@ -282,14 +297,15 @@ impl VirtualTrackpad
     // dragEndDelay time should be cut short by a pointer or scoll gesture;
     // this function listens on the channel for either a pointer button press,
     // a scoll event, or a non-3-finger gesture, and exits when it gets one
-    async fn listen_for_delay_cancel_event(&self) -> Result<bool, RecvError> {
+    async fn listen_for_delay_cancel_event(&self) -> Result<(), RecvError> {
 
         // function blocks until signal is received
         // since CancelMouseUpDelay is the only thing
         // ever sent in the channel, there's no need to
         // check that that's what we received
         let _ = self.rx.recv().await?;
-        Ok(true)
+        debug!("cancellation signal received, cutting delay short");
+        Ok(())
     }
 
 
