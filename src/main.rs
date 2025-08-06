@@ -49,8 +49,6 @@ fn main() -> Result<(), GtError> {
             );
             
             loop {
-
-                //debug!("starting loop...");
                 // this is to keep the infinite loop from filling out into
                 // entire CPU core, which it will do even on no-ops.
                 // This refresh rate (once per 5ms) should be sufficient 
@@ -65,19 +63,21 @@ fn main() -> Result<(), GtError> {
                 // Note: sometimes errors are logged by the `input` crate directly,
                 // but they are non-fatal; they're typically because the system is
                 // too slow to write events before their expiration. You can 
-                // differentiate those by their not having a time and log-level prefix.
+                // differentiate those by their not having a time and log-level prefix.\
                 if let Err(e) = real_trackpad.dispatch() {
                     error!("A {} error occured in reading device buffer: {}", e.kind(), e);
                 }
 
                 for event in &mut real_trackpad {
 
-                    debug!("Blocking in main()");
+                    debug!("Blocking in main()'s for loop");
                     let trans_res = smol::block_on(
                         main_async_rt.run(
                             translator.translate_gesture(event)
                         )
                     );
+
+                    debug!("Mouse is down: {}", translator.vtp.mouse_is_down);
 
                     // do nothing on success (or ignored gesture)
                     if let Err(e) = trans_res { error!("{:?}", e); }
