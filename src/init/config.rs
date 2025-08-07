@@ -2,14 +2,19 @@ use serde::Deserialize;
 use serde_json::from_str;
 use serde_with::serde_as;
 use std::{
-    fs::{OpenOptions, read_to_string},
-    io::ErrorKind,
-    path::PathBuf,
-    time::Duration
+    fs::{File, read_to_string, OpenOptions}, 
+    io::ErrorKind, 
+    path::PathBuf, time::Duration
 };
-use log::SetLoggerError;
-use simplelog::{LevelFilter, SimpleLogger, WriteLogger};
 
+use tracing_subscriber::{
+    filter::LevelFilter, 
+    fmt::{
+        format::{Format, Full, DefaultFields},
+        SubscriberBuilder,
+        time::ChronoLocal
+    }
+};
 // This is simply a wrapper to allow deserialization of the
 // logLevel field into a simplelog::LevelFilter, albeit in
 // a roundabout way.
@@ -29,17 +34,17 @@ pub enum LogLevel {
     Trace
 }
 
-// we had to have a wrapper for LevelFilter for deserializing, 
+// we had to have a wrapper for simplelog::LevelFilter for deserializing, 
 // now we gotta make that wrapper useful in the program
 impl Into<LevelFilter> for LogLevel {
     fn into(self) -> LevelFilter {
         match self {
-            LogLevel::Off   => LevelFilter::Off,
-            LogLevel::Error => LevelFilter::Error,
-            LogLevel::Warn  => LevelFilter::Warn,
-            LogLevel::Info  => LevelFilter::Info,
-            LogLevel::Debug => LevelFilter::Debug,
-            LogLevel::Trace => LevelFilter::Trace,
+            LogLevel::Off   => LevelFilter::OFF,
+            LogLevel::Error => LevelFilter::ERROR,
+            LogLevel::Warn  => LevelFilter::WARN,
+            LogLevel::Info  => LevelFilter::INFO,
+            LogLevel::Debug => LevelFilter::DEBUG,
+            LogLevel::Trace => LevelFilter::TRACE,
         }
     }
 }
@@ -107,6 +112,7 @@ fn default_info()   -> LogLevel { LogLevel::Info }
 // {
 //     acceleration: 1.0,
 //     dragEndDelay: 0,
+//     dragEndDelayCancellable: true,
 //     minMotion: 0.2,
 //     responseTime: 5,
 //     failFast: false,
@@ -149,52 +155,55 @@ pub fn parse_config_file() -> Result<Configuration, std::io::Error> {
     Ok(config)
 }
 
+pub fn init_logger(cfg: Configuration) -> SubscriberBuilder<DefaultFields, Format<Full, ChronoLocal>, LevelFilter, File> {
 
-pub fn init_logger(cfg: Configuration) -> Result<(), SetLoggerError>{
-
-    println!("[PRE-LOG: INFO]: Initializing logger...");
-
-    let log_level = cfg.log_level.into();
+    let log_level: LevelFilter = cfg.log_level.into();
+    let std_out = OpenOptions::new()
+        .append(true)
+        .open("/dev/stdout")
+        .unwrap();   // will not fail
+    
+    let stdout_logger = tracing_subscriber::fmt()
+        .with_writer(std_out)
+        .with_max_level(log_level)
+        .with_timer(ChronoLocal::rfc_3339());
 
     // If the log file is either "stdout" or an invalid file,
     // bypass this block and go to the end, initializing a
     // SimpleLogger (for console logging)
-    if cfg.log_file != "stdout" {
+    if cfg.log_file == "stdout" { return stdout_logger }
 
-        match OpenOptions::new().append(true).open(&cfg.log_file) {
+    let logger =  match OpenOptions::new().append(true).open(&cfg.log_file) {
 
-            Ok(log_file) => {
+        Ok(log_file) => {
 
-                WriteLogger::init(
-                    log_level, 
-                    simplelog::Config::default(), 
-                    log_file
-                )?;  
-                println!(
-                    "[PRE-LOG: INFO]: Logger initialized! Logging to '{}' \
-                    at {}-level verbosity.", cfg.log_file, log_level
-                );
-                return Ok(());
-            },
+            let file_logger= tracing_subscriber::fmt()
+                .with_writer(log_file)
+                .with_max_level(log_level)
+                .with_timer(ChronoLocal::rfc_3339());
+            println!(
+                "[PRE-LOG: INFO]: Logging to '{}' at {}-level verbosity.", 
+                cfg.log_file, 
+                log_level
+            );
+            file_logger
+        },
 
-            Err(open_err) => println!(
-                "[PRE-LOG: WARN]: Failed to open logfile '{}' due to the the following error: {}, {}.", 
+        Err(open_err) => {
+            println!(
+                "[PRE-LOG: WARN]: Failed to open logfile '{}' \
+                due to the the following error: {}, {}.", 
                 cfg.log_file,
                 open_err.kind(),
                 open_err
-            )
-            // continues on to initialize simple logger below
-        };
-    }
+            );
+            println!("[PRE-LOG: WARN]: Logging to stdout at {log_level}-level verbosity.");
+            stdout_logger
+        }
+        // continues on to initialize simple logger below
+    };
+    
 
-    SimpleLogger::init(
-        log_level, 
-        simplelog::Config::default()
-    )?;
-    println!(
-        "[PRE-LOG: INFO]: Logger initialized! Logging to console \
-        at {log_level}-level verbosity."
-    ); 
-
-    Ok(())
+    println!("[PRE-LOG: INFO]: Logger initialized!"); 
+    logger
 }

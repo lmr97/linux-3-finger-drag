@@ -23,13 +23,14 @@ use input_linux::{
 };
 
 use nix::libc::O_NONBLOCK;
-use log::{debug, error};
+use tracing::{debug, error, trace};
 
-use crate::runtime::event_handler::CancelMouseUpDelay;
+use crate::runtime::event_handler::CancelSignal;
 
 pub enum VtpError {
     EventWriteError(std::io::Error), 
-    ChannelRecvError(RecvError)
+    ChannelRecvError(RecvError),
+    IntConversionError(<i64 as TryInto<i64>>::Error)
 }
 
 impl From<std::io::Error> for VtpError {
@@ -51,14 +52,14 @@ impl From<RecvError> for VtpError {
 /// created, or tracked externally somehow. 
 pub struct VirtualTrackpad {
     handle: UInputHandle<File>,
-    rx: Arc<Receiver<CancelMouseUpDelay>>,
+    rx: Receiver<CancelSignal>,
     pub mouse_is_down: bool
 }
 
 
 // Move receiver into start_handler, keep it in the struct by reference,
 // so it can be cloned
-pub fn start_handler(rx: Receiver<CancelMouseUpDelay>) -> Result<VirtualTrackpad, std::io::Error> {
+pub fn start_handler(rx: Receiver<CancelSignal>) -> Result<VirtualTrackpad, std::io::Error> {
     let uinput_file_res = OpenOptions::new()
         .read(true)
         .write(true)
@@ -111,7 +112,7 @@ pub fn start_handler(rx: Receiver<CancelMouseUpDelay>) -> Result<VirtualTrackpad
     Ok(
         VirtualTrackpad { 
             handle: uhandle, 
-            rx: Arc::new(rx), 
+            rx,//: Arc::new(rx), 
             mouse_is_down: false
         }
     )
@@ -119,8 +120,10 @@ pub fn start_handler(rx: Receiver<CancelMouseUpDelay>) -> Result<VirtualTrackpad
 }
 
 async fn timeout(delay: Duration) -> Result<(), RecvError>{
+    trace!("Starting delay of {:?}", delay);
     smol::Timer::after(delay).await;
-    debug!("Delay completed fully");
+    // std::thread::sleep(delay);
+    trace!("Delay completed fully");
     Ok(())
 }
 
@@ -151,7 +154,7 @@ impl Clone for VirtualTrackpad {
 
         VirtualTrackpad {
             handle: UInputHandle::new(File::from(uinput_fd)),
-            rx: Arc::clone(&self.rx),
+            rx: self.rx.clone(),
             mouse_is_down: self.mouse_is_down
         }
     }
@@ -182,7 +185,7 @@ impl VirtualTrackpad
         Ok(())
     }
 
-    pub fn mouse_up(&mut self) -> Result<(), std::io::Error> {   
+    pub fn mouse_up(&mut self) -> Result<(), VtpError> {   
 
         let events = [
             InputEvent::from(
@@ -200,6 +203,7 @@ impl VirtualTrackpad
         ];
         self.handle.write(&events)?;
         self.mouse_is_down = false;
+
         Ok(())
     }
 
@@ -212,11 +216,16 @@ impl VirtualTrackpad
     /// `await`s up to the main runtime. 
     /// 
     /// `delay` is measured in milliseconds.
-    pub async fn mouse_up_delay(&mut self, delay: Duration) -> Result<(), VtpError> {
+    pub async fn mouse_up_delay(&self, delay: Duration) -> Result<(), VtpError> {
         
-        debug!("inside mouse_up_delay");
+        trace!("inside mouse_up_delay");
+        if !self.mouse_is_down { return Ok(()) }
+
+        // self.clear_buffer().await?;
+
         // wait out the duration, unless a cancellation signal
         // is received on the channel (via `self.rx`)
+        
         timeout(delay)
             .or(self.listen_for_delay_cancel_event())
             .await?;
@@ -224,22 +233,22 @@ impl VirtualTrackpad
         let events = [
             InputEvent::from(
                 KeyEvent::new(
-                    VirtualTrackpad::ZERO, 
+                    VirtualTrackpad::ZERO,
                     Key::ButtonLeft, 
                     KeyState::pressed(false))
                 ).into_raw(),
             InputEvent::from(
                 SynchronizeEvent::new(
-                    VirtualTrackpad::ZERO, 
+                    VirtualTrackpad::ZERO,
                     SynchronizeKind::Report, 
                     0)
                 ).into_raw(),
         ];
         self.handle.write(&events)?;
 
-        debug!("mouse_up written after delay");
+        debug!("mouse_up written");
 
-        self.mouse_is_down = false;
+        //self.mouse_is_down = false;
         Ok(())
     }
 
@@ -294,22 +303,38 @@ impl VirtualTrackpad
     }
 
 
+    pub async fn clear_buffer(&self) -> Result<(), RecvError> {
+        trace!("Clearing buffer...");
+        
+        while !self.rx.is_empty() {
+            self.rx.recv().await?;
+        }
+
+        trace!("buffer cleared");
+        Ok(())
+    }
+    
     // dragEndDelay time should be cut short by a pointer or scoll gesture;
     // this function listens on the channel for either a pointer button press,
     // a scoll event, or a non-3-finger gesture, and exits when it gets one
     async fn listen_for_delay_cancel_event(&self) -> Result<(), RecvError> {
 
         // function blocks until signal is received
-        // since CancelMouseUpDelay is the only thing
+        // since CancelSignal is the only thing
         // ever sent in the channel, there's no need to
         // check that that's what we received
-        let _ = self.rx.recv().await?;
-        debug!("cancellation signal received, cutting delay short");
+        self.clear_buffer().await?;
+        trace!("Current PID: {:?}", std::process::id());
+        trace!("Listening for cancel signal...");
+        trace!("Size of buffer currently: {}", self.rx.len());
+        let cxl = self.rx.recv().await?;
+        debug!("cancellation signal received: {:?}, cutting delay short", cxl);
+        
         Ok(())
     }
 
 
-    pub fn destruct(self) -> Result<(), std::io::Error>{
+    pub fn destruct(self) -> Result<(), std::io::Error> {
         self.handle.dev_destroy()
     }
 }

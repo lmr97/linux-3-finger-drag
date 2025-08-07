@@ -1,12 +1,12 @@
 use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
-use smol::channel::unbounded;
+use smol::channel;
 use signal_hook::{self, consts::{SIGINT, SIGTERM}};
-#[macro_use] extern crate log;
+use tracing::{debug, error, info, trace};
 
 use linux_3_finger_drag::{
     init::{config, libinput_init},
     runtime::{
-        event_handler::{CancelMouseUpDelay, GestureTranslator, GtError}, 
+        event_handler::{CancelSignal, GestureTranslator, GtError}, 
         virtual_trackpad
     }
 };
@@ -15,13 +15,15 @@ use linux_3_finger_drag::{
 fn main() -> Result<(), GtError> {
 
     let configs = init_cfg();
+    config::init_logger(configs.clone()).init();
+    trace!("Main PID: {}", std::process::id());
 
     // handling SIGINT and SIGTERM
     let should_exit = Arc::new(AtomicBool::new(false));
     signal_hook::flag::register(SIGTERM, Arc::clone(&should_exit)).unwrap();
     signal_hook::flag::register(SIGINT, Arc::clone(&should_exit)).unwrap();
 
-    let (sender, recvr) = unbounded::<CancelMouseUpDelay>();
+    let (sender, recvr) = channel::bounded::<CancelSignal>(1);
     let mut vtrackpad = virtual_trackpad::start_handler(recvr)?;
 
     info!("Searching for the trackpad on your device...");
@@ -34,17 +36,10 @@ fn main() -> Result<(), GtError> {
             
             info!("linux-3-finger-drag started successfully!");
 
-            // lightweight async runtime, so you don't have to compile tokio. 
-            // I'm using two runtimes so the async tasks are scoped, which helps
-            // to make sure any running forks get properly cleaned up dropped 
-            // when the program exits.
-            let gt_async_rt = smol::Executor::new();
-            let main_async_rt = smol::Executor::new();
-
             let mut translator = GestureTranslator::new(
                 vtrackpad.clone(), 
-                configs.clone(), 
-                gt_async_rt, 
+                configs.clone(),
+                smol::Executor::new(),
                 sender
             );
             
@@ -70,11 +65,9 @@ fn main() -> Result<(), GtError> {
 
                 for event in &mut real_trackpad {
 
-                    debug!("Blocking in main()'s for loop");
+                    trace!("Blocking in main()'s for loop");
                     let trans_res = smol::block_on(
-                        main_async_rt.run(
-                            translator.translate_gesture(event)
-                        )
+                        translator.translate_gesture(event)
                     );
 
                     debug!("Mouse is down: {}", translator.vtp.mouse_is_down);
@@ -114,17 +107,6 @@ fn init_cfg() -> config::Configuration {
             );
             cfg
         }
-    };
-
-    if let Err(_) = config::init_logger(configs.clone()) {
-        // the only error that gets raised is a SetLoggerError,
-        // which only occurs when a logger has already been set
-        // for the program (not really possible in this program,
-        // but trying to cover all the bases here)
-        println!(
-            "[PRE-LOG: WARNING]: a logger seems to have already been \
-            initialized for this program."
-        );
     };
 
     configs

@@ -9,7 +9,7 @@ use input::{
     event::EventTrait, 
     DeviceCapability::{Gesture, Pointer}
 };
-use log::{debug, info, error};
+use tracing::{debug, info, error};
 use users::{get_user_by_uid, get_current_uid, get_user_groups};
 
 // straight from the docs for input.rs, if I'm honest
