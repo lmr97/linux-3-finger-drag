@@ -5,12 +5,9 @@
 // https://github.com/arcnmx/input-linux-rs/blob/main/examples/mouse-movements.rs
 
 use std::{
-    fs::{File, OpenOptions},
-    os::{fd::AsFd, unix::fs::OpenOptionsExt},
-    sync::Arc,
-    //sync::mpsc::{Receiver, RecvError},
-    time::{self, Duration},
-    thread
+    fs::{File, OpenOptions}, 
+    os::{fd::AsFd, unix::fs::OpenOptionsExt}, 
+    thread, time::{self, Duration}
 };
 use smol::{channel::{Receiver, RecvError}, future::FutureExt};
 use input_linux::{
@@ -25,7 +22,7 @@ use input_linux::{
 use nix::libc::O_NONBLOCK;
 use tracing::{debug, error, trace};
 
-use crate::runtime::event_handler::CancelSignal;
+use crate::runtime::event_handler::ControlSignal::{self, *};
 
 pub enum VtpError {
     EventWriteError(std::io::Error), 
@@ -52,14 +49,14 @@ impl From<RecvError> for VtpError {
 /// created, or tracked externally somehow. 
 pub struct VirtualTrackpad {
     handle: UInputHandle<File>,
-    rx: Receiver<CancelSignal>,
+    rx: Receiver<ControlSignal>,
     pub mouse_is_down: bool
 }
 
 
 // Move receiver into start_handler, keep it in the struct by reference,
 // so it can be cloned
-pub fn start_handler(rx: Receiver<CancelSignal>) -> Result<VirtualTrackpad, std::io::Error> {
+pub fn start_handler(rx: Receiver<ControlSignal>) -> Result<VirtualTrackpad, std::io::Error> {
     let uinput_file_res = OpenOptions::new()
         .read(true)
         .write(true)
@@ -119,12 +116,16 @@ pub fn start_handler(rx: Receiver<CancelSignal>) -> Result<VirtualTrackpad, std:
 
 }
 
-async fn timeout(delay: Duration) -> Result<(), RecvError>{
+
+/// Start a timer for `delay`.
+/// 
+/// The messy return type is to match `listen_for_signal`. It is infallible.
+async fn plain_timeout(delay: Duration) -> Result<Option<ControlSignal>, RecvError>{
     trace!("Starting delay of {:?}", delay);
     smol::Timer::after(delay).await;
     // std::thread::sleep(delay);
     trace!("Delay completed fully");
-    Ok(())
+    Ok(None)
 }
 
 impl Clone for VirtualTrackpad {
@@ -207,28 +208,56 @@ impl VirtualTrackpad
         Ok(())
     }
 
-    ///  This function waits for `delay`, or a cancellation signal (see 
-    /// `event_handler::GestureTranslator::check_for_delay_cancelling_event`
-    /// for details) and then sets the left-click button "up" (i.e. `!pressed`). 
-    /// after whichever happens first.
-    /// 
-    /// Any errors that occur here get propagated through the 
-    /// `await`s up to the main runtime. 
-    /// 
+
+    /// This is an infinite loop that listens for and processes signals
+    /// for a delay to the end of the drag, like cancelation. This 
+    /// thread will not panic, and will not stop unless either it's 
+    /// sent a `ControlSignal::TerminateThread`, or an error was 
+    /// raised. So if it ends prematurely, it's because of an error.
+    pub async fn handle_mouse_up_timeout(&mut self, delay: Duration) -> Result<(), VtpError> {
+        
+        loop {
+            trace!("starting new loop of handle_mouse_up_timeout");
+            let ctl_sig = self.rx.recv().await?;
+            debug!("sig recv'd in outer loop: {:?}", ctl_sig);
+
+            // handle signals received during outer loop
+            match ctl_sig {
+                RestartTimer  => {},        // proceed to timer
+                CancelTimer => {
+                    trace!("Setting mouse up now");
+                    self.mouse_up()?;
+                    continue;
+                },
+                CancelMouseUp => continue,  // don't do anything this iteration
+                TerminateThread => break
+            }
+
+            // handle signals received during timer loop
+            // that can't be handled within that scope
+            match self.run_timer(delay).await? {
+                Some(signal) => {
+                    match signal {
+                        CancelMouseUp => continue,
+                        TerminateThread => break,
+                        _ => {}                     // cancel/restart timer have already been handled
+                    }
+                },
+                None => {}
+            }
+
+            self.mouse_up()?;
+        }
+
+        Ok(())
+    }
+
+    
+    /// A simple, blocking mouse_up, but with a set, blocking, uncancellable delay. 
     /// `delay` is measured in milliseconds.
-    pub async fn mouse_up_delay(&self, delay: Duration) -> Result<(), VtpError> {
+    pub fn mouse_up_delay_blocking(&mut self, delay: Duration) -> Result<(), VtpError> {
         
-        trace!("inside mouse_up_delay");
-        if !self.mouse_is_down { return Ok(()) }
-
-        // self.clear_buffer().await?;
-
-        // wait out the duration, unless a cancellation signal
-        // is received on the channel (via `self.rx`)
-        
-        timeout(delay)
-            .or(self.listen_for_delay_cancel_event())
-            .await?;
+        std::thread::sleep(delay);
 
         let events = [
             InputEvent::from(
@@ -246,9 +275,9 @@ impl VirtualTrackpad
         ];
         self.handle.write(&events)?;
 
-        debug!("mouse_up written");
+        debug!("mouse_up written from mouse_up_delay_blocking");
 
-        //self.mouse_is_down = false;
+        self.mouse_is_down = false;
         Ok(())
     }
 
@@ -317,22 +346,44 @@ impl VirtualTrackpad
     // dragEndDelay time should be cut short by a pointer or scoll gesture;
     // this function listens on the channel for either a pointer button press,
     // a scoll event, or a non-3-finger gesture, and exits when it gets one
-    async fn listen_for_delay_cancel_event(&self) -> Result<(), RecvError> {
+    async fn listen_for_signal(&self) -> Result<Option<ControlSignal>, RecvError> {
 
         // function blocks until signal is received
-        // since CancelSignal is the only thing
+        // since ControlSignal is the only thing
         // ever sent in the channel, there's no need to
         // check that that's what we received
-        self.clear_buffer().await?;
+        // self.clear_buffer().await?;
         trace!("Current PID: {:?}", std::process::id());
         trace!("Listening for cancel signal...");
         trace!("Size of buffer currently: {}", self.rx.len());
-        let cxl = self.rx.recv().await?;
-        debug!("cancellation signal received: {:?}, cutting delay short", cxl);
-        
-        Ok(())
+        let sig = self.rx.recv().await?;
+        debug!("Signal received: {:?}", sig);
+        Ok(Some(sig))
     }
 
+
+    /// A timer that can be cancelled or reset via a signal in the channel. The return value
+    /// is what signal was received, if any, so they 
+    async fn run_timer(&self, delay: Duration) -> Result<Option<ControlSignal>, RecvError>{
+        loop {
+            // returns the output of the function that returns first
+            let signal_opt = plain_timeout(delay)
+                .or(self.listen_for_signal())
+                .await?;
+            
+            match signal_opt {
+                Some(signal) => {
+                    match signal {
+                        RestartTimer => continue,  
+                        // function exits, lets the outer loop handle the other signals
+                        _ => return Ok(Some(signal)), 
+                    }
+                },
+                None => break
+            }
+        }
+        Ok(None)
+    }
 
     pub fn destruct(self) -> Result<(), std::io::Error> {
         self.handle.dev_destroy()
