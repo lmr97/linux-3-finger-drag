@@ -16,6 +16,7 @@ serde_with = "3.14.0"
 smol = "2.0.2"
 tracing-subscriber = { version = "0.3.19", features = ["chrono"] }
 tracing = "0.1.41"
+tokio = { version = "1.47.1", features = ["macros", "rt", "rt-multi-thread"] }
 
 [[bench]]
 name = "cloning"
