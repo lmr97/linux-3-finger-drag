@@ -1,29 +1,29 @@
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+use std::{sync::{atomic::{AtomicBool, Ordering}, Arc}, time::Duration};
 use smol::channel;
-use signal_hook::{self, consts::{SIGINT, SIGTERM}};
+use signal_hook::{self, consts::{SIGINT, SIGTERM}, flag};
 use tracing::{debug, error, info, trace};
 
 use linux_3_finger_drag::{
     init::{config, libinput_init},
     runtime::{
-        event_handler::{CancelSignal, GestureTranslator, GtError}, 
+        event_handler::{ControlSignal, GestureTranslator, GtError}, 
         virtual_trackpad
     }
 };
 
 
-fn main() -> Result<(), GtError> {
+#[tokio::main]
+async fn main() -> Result<(), GtError> {
 
-    let configs = init_cfg();
+    let configs = config::init_cfg();
     config::init_logger(configs.clone()).init();
-    trace!("Main PID: {}", std::process::id());
 
     // handling SIGINT and SIGTERM
     let should_exit = Arc::new(AtomicBool::new(false));
-    signal_hook::flag::register(SIGTERM, Arc::clone(&should_exit)).unwrap();
-    signal_hook::flag::register(SIGINT, Arc::clone(&should_exit)).unwrap();
+    flag::register(SIGTERM, Arc::clone(&should_exit)).unwrap();
+    flag::register(SIGINT,  Arc::clone(&should_exit)).unwrap();
 
-    let (sender, recvr) = channel::bounded::<CancelSignal>(1);
+    let (sender, recvr) = channel::bounded::<ControlSignal>(3);
     let mut vtrackpad = virtual_trackpad::start_handler(recvr)?;
 
     info!("Searching for the trackpad on your device...");
@@ -32,51 +32,14 @@ fn main() -> Result<(), GtError> {
     // the virtual trackpad before it exits
     let main_result = match libinput_init::find_real_trackpad() {
 
-        Ok(mut real_trackpad) => {
-            
-            info!("linux-3-finger-drag started successfully!");
+        Ok(real_trackpad) => {
 
-            let mut translator = GestureTranslator::new(
+            let translator = GestureTranslator::new(
                 vtrackpad.clone(), 
                 configs.clone(),
-                smol::Executor::new(),
                 sender
             );
-            
-            loop {
-                // this is to keep the infinite loop from filling out into
-                // entire CPU core, which it will do even on no-ops.
-                // This refresh rate (once per 5ms) should be sufficient 
-                // for most purposes.
-                std::thread::sleep(configs.response_time);
-
-                // handle interrupts
-                if should_exit.load(Ordering::Relaxed) {
-                    break;
-                }
-                
-                // Note: sometimes errors are logged by the `input` crate directly,
-                // but they are non-fatal; they're typically because the system is
-                // too slow to write events before their expiration. You can 
-                // differentiate those by their not having a time and log-level prefix.\
-                if let Err(e) = real_trackpad.dispatch() {
-                    error!("A {} error occured in reading device buffer: {}", e.kind(), e);
-                }
-
-                for event in &mut real_trackpad {
-
-                    trace!("Blocking in main()'s for loop");
-                    let trans_res = smol::block_on(
-                        translator.translate_gesture(event)
-                    );
-
-                    debug!("Mouse is down: {}", translator.vtp.mouse_is_down);
-
-                    // do nothing on success (or ignored gesture)
-                    if let Err(e) = trans_res { error!("{:?}", e); }
-                }
-            };
-            Ok(())
+            main_event_loop(&should_exit, real_trackpad, translator).await
         },
         Err(e) => Err(GtError::from(e))
     };
@@ -92,22 +55,66 @@ fn main() -> Result<(), GtError> {
 }
 
 
-fn init_cfg() -> config::Configuration {
+// This function is placed in `main.rs` since it's essentially a 
+// part of `main`, and I wanted to break it out so the `main` isn't
+// too sprawling
+async fn main_event_loop(
+    should_exit: &Arc<AtomicBool>,
+    mut real_trackpad: input::Libinput, 
+    mut translator: GestureTranslator
+) -> Result<(), GtError> {
+
+    // spawn 1 separate thread to handle mouse_up_delay timeouts
+    let mut mouse_up_listener = None;  // in case we don't need to spawn
     
-    println!("[PRE-LOG: INFO]: Loading configuration...");
-    let configs = match config::parse_config_file() {
-        Ok(cfg) => {
-            println!("[PRE-LOG: INFO]: Successfully loaded your configuration (with defaults for unspecified values): \n{:#?}", &cfg);
-            cfg
-        },
-        Err(err) => {
-            let cfg = Default::default();
-            println!("\n[PRE-LOG: WARNING]: {err}\n\nThe configuration file could not be \
-                loaded, so the program will continue with defaults of:\n{cfg:#?}",
-            );
-            cfg
+    if translator.cfg.drag_end_delay != Duration::ZERO 
+    || translator.cfg.drag_end_delay_cancellable {
+        
+        debug!("Creating new thread to manage drag end timer");
+        let mut vtp_clone = translator.vtp.clone();
+        let delay = translator.cfg.drag_end_delay;
+
+        let fork_fn = async move {
+            vtp_clone.handle_mouse_up_timeout(delay)
+                .await
+                .map_err(GtError::from)
+        };
+
+        mouse_up_listener = Some(tokio::spawn(fork_fn));
+    }
+
+    info!("linux-3-finger-drag started successfully!");
+
+    loop {
+        // this is to keep the infinite loop from filling out into
+        // entire CPU core, which it will do even on no-ops.
+        std::thread::sleep(translator.cfg.response_time);
+
+        // handle interrupts
+        if should_exit.load(Ordering::Relaxed) {
+            break;
+        }
+        
+        if let Err(e) = real_trackpad.dispatch() {
+            error!("A {} error occured in reading device buffer: {}", e.kind(), e);
+        }
+
+        for event in &mut real_trackpad {
+
+            trace!("Blocking in main()'s for loop");
+
+            // do nothing on success (or ignored gesture)
+            if let Err(e) = translator.translate_gesture(event).await { 
+                error!("{:?}", e); 
+            }
         }
     };
 
-    configs
+    if let Some(handle) = mouse_up_listener {
+        trace!("Joining delay timer thread");
+        translator.send_signal(ControlSignal::TerminateThread).await?;
+        return handle.await?
+    }
+
+    Ok(())
 }
