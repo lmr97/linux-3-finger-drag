@@ -22,7 +22,7 @@ use input_linux::{
 use nix::libc::O_NONBLOCK;
 use tracing::{debug, error, trace};
 
-use crate::runtime::event_handler::ControlSignal::{self, *};
+use crate::runtime::event_handling::ControlSignal::{self, *};
 
 pub enum VtpError {
     EventWriteError(std::io::Error), 

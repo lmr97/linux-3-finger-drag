@@ -10,7 +10,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use linux_3_finger_drag::{
     init::config::Configuration,
     runtime::{
-        event_handler::ControlSignal,
+        event_handling::ControlSignal,
         virtual_trackpad
     }
 };
