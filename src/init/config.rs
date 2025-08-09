@@ -155,6 +155,28 @@ pub fn parse_config_file() -> Result<Configuration, std::io::Error> {
     Ok(config)
 }
 
+
+pub fn init_cfg() -> Configuration {
+    
+    println!("[PRE-LOG: INFO]: Loading configuration...");
+    let configs = match parse_config_file() {
+        Ok(cfg) => {
+            println!("[PRE-LOG: INFO]: Successfully loaded your configuration (with defaults for unspecified values): \n{:#?}", &cfg);
+            cfg
+        },
+        Err(err) => {
+            let cfg = Default::default();
+            println!("\n[PRE-LOG: WARNING]: {err}\n\nThe configuration file could not be \
+                loaded, so the program will continue with defaults of:\n{cfg:#?}",
+            );
+            cfg
+        }
+    };
+
+    configs
+}
+
+
 pub fn init_logger(cfg: Configuration) -> SubscriberBuilder<DefaultFields, Format<Full, ChronoLocal>, LevelFilter, File> {
 
     let log_level: LevelFilter = cfg.log_level.into();
