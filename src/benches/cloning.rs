@@ -10,13 +10,13 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use linux_3_finger_drag::{
     init::config::Configuration,
     runtime::{
-        event_handler::CancelSignal,
+        event_handler::ControlSignal,
         virtual_trackpad
     }
 };
 
 pub fn clone_virtual_trackpad(c: &mut Criterion) {
-    let (_, rx) = unbounded::<CancelSignal>();
+    let (_, rx) = unbounded::<ControlSignal>();
     let vtp = black_box(virtual_trackpad::start_handler(rx).unwrap());
     
     c.bench_function("VirtualTrackpad cloning", |b| {
