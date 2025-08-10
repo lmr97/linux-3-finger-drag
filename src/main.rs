@@ -1,4 +1,4 @@
-use std::{sync::{atomic::{AtomicBool, Ordering}, Arc}, time::Duration};
+use std::{sync::{atomic::{AtomicBool, Ordering}, Arc}};
 use smol::channel;
 use signal_hook::{self, consts::{SIGINT, SIGTERM}, flag};
 use tracing::{debug, error, info, trace};
@@ -65,23 +65,18 @@ async fn main_event_loop(
 ) -> Result<(), GtError> {
 
     // spawn 1 separate thread to handle mouse_up_delay timeouts
-    let mut mouse_up_listener = None;  // in case we don't need to spawn
-    
-    if translator.cfg.drag_end_delay != Duration::ZERO 
-    || translator.cfg.drag_end_delay_cancellable {
-        
-        debug!("Creating new thread to manage drag end timer");
-        let mut vtp_clone = translator.vtp.clone();
-        let delay = translator.cfg.drag_end_delay;
+    debug!("Creating new thread to manage drag end timer");
+    let mut vtp_clone = translator.vtp.clone();
+    let delay = translator.cfg.drag_end_delay;
 
-        let fork_fn = async move {
-            vtp_clone.handle_mouse_up_timeout(delay)
-                .await
-                .map_err(GtError::from)
-        };
+    let fork_fn = async move {
+        vtp_clone.handle_mouse_up_timeout(delay)
+            .await
+            .map_err(GtError::from)
+    };
 
-        mouse_up_listener = Some(tokio::spawn(fork_fn));
-    }
+    let mouse_up_listener = tokio::spawn(fork_fn);
+
 
     info!("linux-3-finger-drag started successfully!");
 
@@ -107,14 +102,25 @@ async fn main_event_loop(
             if let Err(e) = translator.translate_gesture(event).await { 
                 error!("{:?}", e); 
             }
+
+            // the other thread only finishes (without being sent a 
+            // `ControlSignal::TerminateThread` being sent into the channel) 
+            // is when an error is raised. it has been designed not to panic. 
+            // the value the thread returns is a Result, so the this extracts 
+            // the Result from the fork and returns it.
+            if mouse_up_listener.is_finished() {
+                let fork_err = mouse_up_listener.await?.unwrap_err();
+                error!("Error raised in fork: {:?}", fork_err);
+                return Err(fork_err);
+            }
         }
     };
 
-    if let Some(handle) = mouse_up_listener {
-        trace!("Joining delay timer thread");
-        translator.send_signal(ControlSignal::TerminateThread).await?;
-        return handle.await?
-    }
+    trace!("Joining delay timer thread");
+    translator.send_signal(ControlSignal::TerminateThread).await?;
 
-    Ok(())
+    // awaiting a JoinHandle produces a Result
+    // the generic for this JoinHandle, though, is itself a Result, 
+    // so we can just return what the JoinHandle yields
+    mouse_up_listener.await? 
 }
