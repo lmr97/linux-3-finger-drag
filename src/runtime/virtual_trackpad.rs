@@ -9,7 +9,10 @@ use std::{
     os::{fd::AsFd, unix::fs::OpenOptionsExt}, 
     thread, time::{self, Duration}
 };
-use smol::{channel::{Receiver, RecvError}, future::FutureExt};
+use smol::{
+    channel::{Receiver, RecvError}, 
+    future::FutureExt
+};
 use input_linux::{
     EventKind, EventTime, 
     InputEvent, InputId, 
@@ -123,7 +126,6 @@ pub fn start_handler(rx: Receiver<ControlSignal>) -> Result<VirtualTrackpad, std
 async fn plain_timeout(delay: Duration) -> Result<Option<ControlSignal>, RecvError>{
     trace!("Starting delay of {:?}", delay);
     smol::Timer::after(delay).await;
-    // std::thread::sleep(delay);
     trace!("Delay completed fully");
     Ok(None)
 }
@@ -247,6 +249,7 @@ impl VirtualTrackpad
             }
 
             self.mouse_up()?;
+            debug!("mouse_up written from async mouse_up fn");
         }
 
         Ok(())
@@ -331,17 +334,6 @@ impl VirtualTrackpad
         Ok(())
     }
 
-
-    pub async fn clear_buffer(&self) -> Result<(), RecvError> {
-        trace!("Clearing buffer...");
-        
-        while !self.rx.is_empty() {
-            self.rx.recv().await?;
-        }
-
-        trace!("buffer cleared");
-        Ok(())
-    }
     
     // dragEndDelay time should be cut short by a pointer or scoll gesture;
     // this function listens on the channel for either a pointer button press,
@@ -352,9 +344,7 @@ impl VirtualTrackpad
         // since ControlSignal is the only thing
         // ever sent in the channel, there's no need to
         // check that that's what we received
-        // self.clear_buffer().await?;
-        trace!("Current PID: {:?}", std::process::id());
-        trace!("Listening for cancel signal...");
+        debug!("Listening for cancel signal...");
         trace!("Size of buffer currently: {}", self.rx.len());
         let sig = self.rx.recv().await?;
         debug!("Signal received: {:?}", sig);
