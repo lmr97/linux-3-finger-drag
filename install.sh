@@ -200,7 +200,7 @@ read answer
 case "$answer" in 
     y | "")
         echo "Okay! Rebooting now..."
-        su $SUDO_USER -c 'systemctl soft-reboot'    # restart user-space only; a quicker operation to update groups
+        reboot
     ;;
     n)
         echo "Not rebooting. The program will start working after the next boot."
