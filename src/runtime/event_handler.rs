@@ -80,7 +80,6 @@ impl From<VtpError> for GtError {
 pub struct GestureTranslator {
     pub vtp: VirtualTrackpad,
     pub cfg: Configuration,
-    // spandle: Option<JoinHandle<Result<(), GtError>>>,  // spawn handle
     tx: Sender<ControlSignal>,
 }
 
@@ -95,8 +94,7 @@ impl GestureTranslator {
         GestureTranslator {
             vtp,
             cfg,
-            tx,
-            // spandle: None,
+            tx
         }
     }
 
@@ -195,15 +193,6 @@ impl GestureTranslator {
         if self.cfg.drag_end_delay == Duration::ZERO {
             
             return self.mouse_up_now().await;
-        }
-
-        // if the delay is non-cancellable, don't bother with the 
-        // other thread
-        if !self.cfg.drag_end_delay_cancellable {
-            
-            return Ok(
-                self.vtp.mouse_up_delay_blocking(self.cfg.drag_end_delay)?
-            );
         }
 
         // default case
