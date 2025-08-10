@@ -1,7 +1,6 @@
 {
     "acceleration": 1.0,
     "dragEndDelay": 0,
-    "dragEndDelayCancellable": true,
     "logFile": "stdout",
     "logLevel": "info",
     "minMotion": 0.2,
