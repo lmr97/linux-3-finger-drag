@@ -2,6 +2,7 @@ use std::{sync::{atomic::{AtomicBool, Ordering}, Arc}};
 use smol::channel;
 use signal_hook::{self, consts::{SIGINT, SIGTERM}, flag};
 use tracing::{debug, error, info, trace};
+use tracing_subscriber::fmt::time::ChronoLocal;
 
 use linux_3_finger_drag::{
     init::{config, libinput_init},
@@ -16,7 +17,17 @@ use linux_3_finger_drag::{
 async fn main() -> Result<(), GtError> {
 
     let configs = config::init_cfg();
-    config::init_logger(configs.clone()).init();
+
+    match config::init_file_logger(configs.clone()) {
+        Some(logger) => logger.init(), 
+        None => {
+            tracing_subscriber::fmt()
+                .with_writer(std::io::stdout)
+                .with_max_level(configs.log_level)
+                .with_timer(ChronoLocal::rfc_3339())
+                .init();
+        }
+    };
 
     // handling SIGINT and SIGTERM
     let should_exit = Arc::new(AtomicBool::new(false));

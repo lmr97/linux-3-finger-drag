@@ -18,7 +18,7 @@ use tracing_subscriber::{
 // This is simply a wrapper to allow deserialization of the
 // logLevel field into a simplelog::LevelFilter, albeit in
 // a roundabout way.
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, Copy)]
 pub enum LogLevel {
     #[serde(rename = "off")]
     Off, 
@@ -171,23 +171,14 @@ pub fn init_cfg() -> Configuration {
 }
 
 
-pub fn init_logger(cfg: Configuration) -> SubscriberBuilder<DefaultFields, Format<Full, ChronoLocal>, LevelFilter, File> {
+pub fn init_file_logger(cfg: Configuration) -> Option<SubscriberBuilder<DefaultFields, Format<Full, ChronoLocal>, LevelFilter, File>>{
 
     let log_level: LevelFilter = cfg.log_level.into();
-    let std_out = OpenOptions::new()
-        .append(true)
-        .open("/dev/stdout")
-        .unwrap();   // will not fail
     
-    let stdout_logger = tracing_subscriber::fmt()
-        .with_writer(std_out)
-        .with_max_level(log_level)
-        .with_timer(ChronoLocal::rfc_3339());
-
     // If the log file is either "stdout" or an invalid file,
     // bypass this block and go to the end, initializing a
     // SimpleLogger (for console logging)
-    if cfg.log_file == "stdout" { return stdout_logger }
+    if cfg.log_file == "stdout" { return None }
 
     let logger =  match OpenOptions::new().append(true).open(&cfg.log_file) {
 
@@ -202,7 +193,7 @@ pub fn init_logger(cfg: Configuration) -> SubscriberBuilder<DefaultFields, Forma
                 cfg.log_file, 
                 log_level
             );
-            file_logger
+            Some(file_logger)
         },
 
         Err(open_err) => {
@@ -214,7 +205,7 @@ pub fn init_logger(cfg: Configuration) -> SubscriberBuilder<DefaultFields, Forma
                 open_err
             );
             println!("[PRE-LOG: WARN]: Logging to stdout at {log_level}-level verbosity.");
-            stdout_logger
+            return None
         }
         // continues on to initialize simple logger below
     };
