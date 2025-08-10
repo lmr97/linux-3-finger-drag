@@ -28,6 +28,7 @@ async fn main() -> Result<(), GtError> {
                 .init();
         }
     };
+    println!("[PRE-LOG: INFO]: Logger initialized!"); 
 
     // handling SIGINT and SIGTERM
     let should_exit = Arc::new(AtomicBool::new(false));

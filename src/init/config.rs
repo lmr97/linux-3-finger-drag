@@ -180,7 +180,7 @@ pub fn init_file_logger(cfg: Configuration) -> Option<SubscriberBuilder<DefaultF
     // SimpleLogger (for console logging)
     if cfg.log_file == "stdout" { return None }
 
-    let logger =  match OpenOptions::new().append(true).open(&cfg.log_file) {
+    match OpenOptions::new().append(true).open(&cfg.log_file) {
 
         Ok(log_file) => {
 
@@ -205,12 +205,7 @@ pub fn init_file_logger(cfg: Configuration) -> Option<SubscriberBuilder<DefaultF
                 open_err
             );
             println!("[PRE-LOG: WARN]: Logging to stdout at {log_level}-level verbosity.");
-            return None
+            None
         }
-        // continues on to initialize simple logger below
-    };
-    
-
-    println!("[PRE-LOG: INFO]: Logger initialized!"); 
-    logger
+    }
 }
