@@ -1,11 +1,10 @@
 # Changelog
 
-## 1.5.0 - 2025-07-??
+## 1.5.0 - 2025-08-??
 
 ### Added
 
 - Add auto cancelation of drag end delay upon other gesture
-- Add configuration variable, `dragEndDelayCancellable`, which toggles this behavior
 
 ### Removed
 

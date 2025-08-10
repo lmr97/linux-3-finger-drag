@@ -30,7 +30,6 @@ OS | Version | Desktop Enviroment | Verified
   - [Set up](#Set-up-configuration)
   - [acceleration](#acceleration-float)
   - [dragEndDelay](#dragenddelay-int)
-  - [dragEndDelayCancellable](#dragenddelaycancellable-bool)
   - [logFile](#logfile-string)
   - [logLevel](#loglevel-string)
   - [minMotion](#minmotion-float)
@@ -202,17 +201,6 @@ If the JSON is malformed in the found configuration file, or the file is simply 
 ### `acceleration` (float)
 This is a speedup multiplier which will be applied to all 3-finger gesture movements. Defaults to `1.0`.
 
-### `dragEndDelayCancellable` (bool)
-
-This toggles whether the delay for drag ending delay, configured by `dragEndDelay`, should be cancelled early or not upon certain gestures, mirroring the behavior found in MacBooks when using three-finger-dragging. The gestures that can cancel the delay are:
-
-- a non-three-finger gesture
-
-- pointer motion
-
-Setting this value to `false` means that no gesture cancels the drag end delay, so any gesture that moves the mouse moves the drag as well. This can be useful if you want to continue three-finger drags using only one finger for the duration of `dragEndDelay` (after which the dragging ends without another three-finger gesture). 
-
-If `dragEndDelay` is 0, this setting has no effect. Defaults to `true`.
 
 ### `dragEndDelay` (int)
 This is the time (in milliseconds) that the mouse hold will persist for after you lift your fingers (to give you a moment to reposition your fingers). Defaults to 0.
