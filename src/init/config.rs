@@ -19,32 +19,20 @@ use tracing_subscriber::{
 // logLevel field into a simplelog::LevelFilter, albeit in
 // a roundabout way.
 #[derive(Deserialize, Debug, Clone, Copy)]
-pub enum LogLevel {
-    #[serde(rename = "off")]
-    Off, 
-    #[serde(rename = "error")]
-    Error, 
-    #[serde(rename = "warn")]
-    Warn, 
-    #[serde(rename = "info")]
-    Info, 
-    #[serde(rename = "debug")]
-    Debug, 
-    #[serde(rename = "trace")]
-    Trace
-}
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel { OFF, ERROR, WARN, INFO, DEBUG, TRACE }
 
 // we had to have a wrapper for simplelog::LevelFilter for deserializing, 
 // now we gotta make that wrapper useful in the program
 impl Into<LevelFilter> for LogLevel {
     fn into(self) -> LevelFilter {
         match self {
-            LogLevel::Off   => LevelFilter::OFF,
-            LogLevel::Error => LevelFilter::ERROR,
-            LogLevel::Warn  => LevelFilter::WARN,
-            LogLevel::Info  => LevelFilter::INFO,
-            LogLevel::Debug => LevelFilter::DEBUG,
-            LogLevel::Trace => LevelFilter::TRACE,
+            LogLevel::OFF   => LevelFilter::OFF,
+            LogLevel::ERROR => LevelFilter::ERROR,
+            LogLevel::WARN  => LevelFilter::WARN,
+            LogLevel::INFO  => LevelFilter::INFO,
+            LogLevel::DEBUG => LevelFilter::DEBUG,
+            LogLevel::TRACE => LevelFilter::TRACE,
         }
     }
 }
@@ -61,18 +49,18 @@ pub struct Configuration {
     #[serde_as(as = "serde_with::DurationMilliSeconds<u64>")]
     pub drag_end_delay: Duration,       // in milliseconds
 
+    #[serde(default = "default_stdout")]
+    pub log_file: String,
+
+    #[serde(default = "default_info")]
+    pub log_level: LogLevel,
+
     #[serde(default = "default_pt_two")]
     pub min_motion: f64,
 
     #[serde(default = "default_5ms")]
     #[serde_as(as = "serde_with::DurationMilliSeconds<u64>")]
     pub response_time: Duration,        // in milliseconds
-
-    #[serde(default = "default_stdout")]
-    pub log_file: String,
-
-    #[serde(default = "default_info")]
-    pub log_level: LogLevel,
 }
 
 impl Default for Configuration {
@@ -80,10 +68,10 @@ impl Default for Configuration {
         Configuration {
             acceleration: 1.0,
             drag_end_delay: Duration::from_millis(0),
-            min_motion: 0.2,
-            response_time: Duration::from_millis(5),
             log_file: "stdout".to_string(),
-            log_level: LogLevel::Info
+            log_level: LogLevel::INFO,
+            min_motion: 0.2,
+            response_time: Duration::from_millis(5)
         }
     }
 }
@@ -97,7 +85,7 @@ fn default_0ms()    -> Duration { Duration::from_millis(0) }
 fn default_5ms()    -> Duration { Duration::from_millis(5) }
 fn default_pt_two() -> f64      { 0.2 }
 fn default_stdout() -> String   { "stdout".to_string() }
-fn default_info()   -> LogLevel { LogLevel::Info }
+fn default_info()   -> LogLevel { LogLevel::INFO }
 
 
 // Configs are so optional that their absence should not crash the program,
@@ -107,11 +95,10 @@ fn default_info()   -> LogLevel { LogLevel::Info }
 // {
 //     acceleration: 1.0,
 //     dragEndDelay: 0,
-//     minMotion: 0.2,
-//     responseTime: 5,
-//     failFast: false,
 //     logFile: "stdout",
 //     logLevel: "info",
+//     minMotion: 0.2,
+//     responseTime: 5
 // }
 //
 // The user is also warned about this, so they can address the issues
