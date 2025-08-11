@@ -1,5 +1,5 @@
 use std::{sync::{atomic::{AtomicBool, Ordering}, Arc}};
-use smol::channel;
+use tokio::sync::mpsc::{self, Receiver};
 use signal_hook::{self, consts::{SIGINT, SIGTERM}, flag};
 use tracing::{debug, error, info, trace};
 use tracing_subscriber::fmt::time::ChronoLocal;
@@ -35,8 +35,8 @@ async fn main() -> Result<(), GtError> {
     flag::register(SIGTERM, Arc::clone(&should_exit)).unwrap();
     flag::register(SIGINT,  Arc::clone(&should_exit)).unwrap();
 
-    let (sender, recvr) = channel::bounded::<ControlSignal>(3);
-    let mut vtrackpad = virtual_trackpad::start_handler(recvr)?;
+    let (sender, recvr) = mpsc::channel::<ControlSignal>(3);
+    let mut vtrackpad = virtual_trackpad::start_handler()?;
 
     info!("Searching for the trackpad on your device...");
 
@@ -51,7 +51,7 @@ async fn main() -> Result<(), GtError> {
                 configs.clone(),
                 sender
             );
-            main_event_loop(&should_exit, real_trackpad, translator).await
+            run_main_event_loop(translator, recvr, &should_exit, real_trackpad).await
         },
         Err(e) => Err(GtError::from(e))
     };
@@ -70,10 +70,12 @@ async fn main() -> Result<(), GtError> {
 // This function is placed in `main.rs` since it's essentially a 
 // part of `main`, and I wanted to break it out so the `main` isn't
 // too sprawling
-async fn main_event_loop(
+async fn run_main_event_loop(
+    mut translator: GestureTranslator,
+    recvr: Receiver<ControlSignal>,
     should_exit: &Arc<AtomicBool>,
     mut real_trackpad: input::Libinput, 
-    mut translator: GestureTranslator
+    
 ) -> Result<(), GtError> {
 
     // spawn 1 separate thread to handle mouse_up_delay timeouts
@@ -82,7 +84,7 @@ async fn main_event_loop(
     let delay = translator.cfg.drag_end_delay;
 
     let fork_fn = async move {
-        vtp_clone.handle_mouse_up_timeout(delay)
+        vtp_clone.handle_mouse_up_timeout(delay, recvr)
             .await
             .map_err(GtError::from)
     };
@@ -115,10 +117,10 @@ async fn main_event_loop(
                 error!("{:?}", e); 
             }
 
-            // the other thread only finishes (without being sent a 
-            // `ControlSignal::TerminateThread` being sent into the channel) 
-            // is when an error is raised. it has been designed not to panic. 
-            // the value the thread returns is a Result, so the this extracts 
+            // Without being a `ControlSignal::TerminateThread` being sent
+            // into the channel, the other thread only finishes when
+            // is an error is raised. it has been designed not to panic. 
+            // the value the thread returns is a `Result`, so the this extracts 
             // the Result from the fork and returns it.
             if mouse_up_listener.is_finished() {
                 let fork_err = mouse_up_listener.await?.unwrap_err();
@@ -128,7 +130,7 @@ async fn main_event_loop(
         }
     };
 
-    trace!("Joining delay timer thread");
+    debug!("Joining delay timer thread");
     translator.send_signal(ControlSignal::TerminateThread).await?;
 
     // awaiting a JoinHandle produces a Result
