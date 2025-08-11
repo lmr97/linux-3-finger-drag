@@ -1,10 +1,10 @@
 # Changelog
 
-## 1.5.0 - 2025-08-??
+## 1.5.0 - 2025-08-11
 
 ### Added
 
-- Add auto cancelation of drag end delay upon other gesture
+- Add auto cancelation of drag end delay upon non-three-fingered gesture
 
 ### Removed
 

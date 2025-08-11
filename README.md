@@ -189,10 +189,10 @@ Below are the fields that can be configured, with the values given here being th
 {
     acceleration: 1.0,
     dragEndDelay: 0,
-    minMotion: 0.2,
-    responseTime: 5,
     logFile: "stdout",
-    logLevel: "info"
+    logLevel: "info",
+    minMotion: 0.2,
+    responseTime: 5
 }
 ```
 
@@ -203,7 +203,7 @@ This is a speedup multiplier which will be applied to all 3-finger gesture movem
 
 
 ### `dragEndDelay` (int)
-This is the time (in milliseconds) that the mouse hold will persist for after you lift your fingers (to give you a moment to reposition your fingers). Defaults to 0.
+This is the time (in milliseconds) that the mouse hold will persist for after you lift your fingers (to give you a moment to reposition your fingers). This timeout will be cancelled if a non-three-fingered gesture is received, and the drag will end. Defaults to 0.
 
 ### `logFile` (string)
 This allows the user to specify a log file separate from the console/`stdout`. It works best with absolute paths, because `~` or other shell variables are not expanded, but relative filepaths work as well. Note that the program will not create the file if it doesn not exist; in this case, it will simply raise a warning and log to the console. If no file is specified, or the file path is invalid, the program will log to the console. Defaults to `"stdout"`.
