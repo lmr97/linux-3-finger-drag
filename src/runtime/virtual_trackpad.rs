@@ -211,7 +211,7 @@ impl VirtualTrackpad
     pub async fn handle_mouse_up_timeout(&mut self, delay: Duration, mut rx: Receiver<ControlSignal>) -> Result<(), std::io::Error> {
         
         loop {
-            trace!("starting new loop of handle_mouse_up_timeout");
+            trace!("awaiting signal in handle_mouse_up_timeout...");
             let ctl_sig = match rx.recv().await {
                 Some(sig) => sig,
                 None => break
