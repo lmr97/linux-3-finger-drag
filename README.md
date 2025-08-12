@@ -223,7 +223,7 @@ This allows for the user to control logging verbosity. This can be one of the fo
   
   6. `trace`
 
-For more info on what these levels are intended to capture, see the documentation for [the `enum` to which these values correspond](https://docs.rs/log/0.4.6/log/enum.Level.html). defaults to `"info"`.
+For more info on what these levels are intended to capture, see the documentation for [the `enum` to which these values correspond](https://docs.rs/log/0.4.6/log/enum.Level.html). Note that `debug` and `trace` levels generate logs extremely rapidly, which both baloons the log file size (even after short periods of use), and consumes spikes CPU usage on fast, long gestures. Defaults to `"info"`.
 
 ### `minMotion` (float)
 This is the minimum motion, measured in pixels ([roughly](https://wayland.freedesktop.org/libinput/doc/latest/normalization-of-relative-motion.html)) that the drag gesture has to exceed to cause mouse movement; it's effectively a sensitivity value, but the program becomes less sensitive to mouse input the higher it is. Defaults to 0.2.
