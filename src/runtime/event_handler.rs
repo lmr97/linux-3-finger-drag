@@ -1,6 +1,7 @@
 use std::time::Duration;
 
-use smol::{channel::{RecvError, SendError, Sender}};
+//use smol::{channel::{RecvError, SendError, Sender}};
+use tokio::sync::mpsc::{error::SendError, Sender};
 use input::{
     event::{
         gesture::{
@@ -14,17 +15,26 @@ use input::{
 };
 
 
-use tracing::{debug, error, trace};
+use tracing::{debug, trace};
 
-use super::virtual_trackpad::{VirtualTrackpad, VtpError};
+use super::virtual_trackpad::VirtualTrackpad;
 use super::super::init::config::Configuration;
 
 /// A signal to send into channel to control the behavior
 /// of the listener on the separate thread that controls
-/// when the mouse hold is released.
+/// when the mouse hold is released. Here's what each signal
+/// means in more detail:
+/// 
+/// `CancelTimer`: Cancel the timer, and release drag inside fork
+/// 
+/// `CancelMouseUp`: Cancel timer, and don't do anything else in the fork (await next signal)
+/// 
+/// `RestartTimer`: Restart timer by restarting the loop in the fork that starts with a timer
+/// 
+/// `TerminateThread`: Terminate function running in fork
 #[derive(Debug)]
 pub enum ControlSignal {
-    CancelTimer,
+    CancelTimer,      // currently not sent in practice, but could be without issue
     CancelMouseUp,
     RestartTimer,     // these two end up being treated the same in practice,
     TerminateThread
@@ -34,9 +44,7 @@ pub enum ControlSignal {
 #[derive(Debug)]
 pub enum GtError {
     EventWriteError(std::io::Error),
-    ChildThreadPanicked(std::io::Error),
     JoinError(tokio::task::JoinError),
-    ChannelRecvError(RecvError),
     ChannelSendError(SendError<ControlSignal>)
 }
 
@@ -54,26 +62,11 @@ impl From<tokio::task::JoinError> for GtError {
     }
 }
 
-impl From<RecvError> for GtError {
-    fn from(err: RecvError) -> Self {
-        GtError::ChannelRecvError(err)
-    }
-}
-
 impl From<SendError<ControlSignal>> for GtError {
 
     fn from(err: SendError<ControlSignal>) -> Self {
         GtError::ChannelSendError(err)
     } 
-}
-
-impl From<VtpError> for GtError {
-    fn from(err: VtpError) -> Self {
-        match err {
-            VtpError::EventWriteError(ioe) => GtError::EventWriteError(ioe), 
-            VtpError::ChannelRecvError(RecvError) => GtError::ChannelRecvError(RecvError)
-        }
-    }
 }
 
 
@@ -201,29 +194,24 @@ impl GestureTranslator {
 
 
     /// Cancels the drag, cutting off any currently running delay.
-    /// The left click is released via the fork when it's running,
-    /// finishing the task and resetting `spandle` to `None.`
+    /// The left click is released here, not in the fork when the 
+    /// timer is running to cut down on latency.
     async fn mouse_up_now(&mut self) -> Result<(), GtError> {
         trace!("Cancelling timer, ending drag immediately");
-        self.send_signal(ControlSignal::CancelTimer).await
+        self.send_signal(ControlSignal::CancelMouseUp).await?;
+        Ok(self.vtp.mouse_up()?)
     }
 
 
-    /// Cancels the drag, cutting off any currently running delay.
-    /// The left click is released via the fork wh
+    /// Wrapper to send signal into channel.
     pub async fn send_signal(&mut self, sig: ControlSignal) -> Result<(), GtError> {
         
-        // The channel can only hold one message, and if one is 
-        // already there, let it be consumed first. This should
-        // all be synchronized enough to not have this happen, 
-        // so if it does, raise an error.
-        if self.tx.is_full() { 
-            error!("Could not send {:?}: Channel has a signal in it already.", sig);
-            return Err(GtError::ChannelSendError(SendError(sig))) 
-        }
-        
+        // The channel can only hold a few messages (I chose to give it a 
+        // low bound), and this send will block until there is space in the
+        // channel.
         trace!("Sending signal: {:?}", sig);
         self.tx.send(sig).await?;
+        trace!("Signal sent!");
         Ok(())
     }
 }
