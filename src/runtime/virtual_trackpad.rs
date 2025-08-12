@@ -9,10 +9,9 @@ use std::{
     os::{fd::AsFd, unix::fs::OpenOptionsExt}, 
     thread, time::{self, Duration}
 };
-use smol::{
-    channel::{Receiver, RecvError}, 
-    future::FutureExt
-};
+use futures_lite::future::FutureExt;
+use async_io::Timer;
+use tokio::sync::mpsc::Receiver;
 use input_linux::{
     EventKind, EventTime, 
     InputEvent, InputId, 
@@ -27,39 +26,16 @@ use tracing::{debug, error, trace};
 
 use crate::runtime::event_handler::ControlSignal::{self, *};
 
-pub enum VtpError {
-    EventWriteError(std::io::Error), 
-    ChannelRecvError(RecvError),
-    IntConversionError(<i64 as TryInto<i64>>::Error)
-}
 
-impl From<std::io::Error> for VtpError {
-    fn from(err: std::io::Error) -> Self {
-        VtpError::EventWriteError(err)
-    }
-}
-
-impl From<RecvError> for VtpError {
-    fn from(err: RecvError) -> Self {
-        VtpError::ChannelRecvError(err)
-    }
-}
-
-
-/// This struct is stateless: no position or mouse state is available.
-/// This is due to issues that arise from mutability in a mulit-thread
-/// context. If state is required, a wrapper struct will need to be
-/// created, or tracked externally somehow. 
+/// This struct is does not preserve `mouse_is_down` state between clones: 
+/// that is copied during cloning, for simplicity. 
 pub struct VirtualTrackpad {
     handle: UInputHandle<File>,
-    rx: Receiver<ControlSignal>,
     pub mouse_is_down: bool
 }
 
 
-// Move receiver into start_handler, keep it in the struct by reference,
-// so it can be cloned
-pub fn start_handler(rx: Receiver<ControlSignal>) -> Result<VirtualTrackpad, std::io::Error> {
+pub fn start_handler() -> Result<VirtualTrackpad, std::io::Error> {
     let uinput_file_res = OpenOptions::new()
         .read(true)
         .write(true)
@@ -112,7 +88,6 @@ pub fn start_handler(rx: Receiver<ControlSignal>) -> Result<VirtualTrackpad, std
     Ok(
         VirtualTrackpad { 
             handle: uhandle, 
-            rx,//: Arc::new(rx), 
             mouse_is_down: false
         }
     )
@@ -123,25 +98,41 @@ pub fn start_handler(rx: Receiver<ControlSignal>) -> Result<VirtualTrackpad, std
 /// Start a timer for `delay`.
 /// 
 /// The messy return type is to match `listen_for_signal`. It is infallible.
-async fn plain_timeout(delay: Duration) -> Result<Option<ControlSignal>, RecvError>{
+async fn plain_timeout(delay: Duration) -> Option<ControlSignal>{
     trace!("Starting delay of {:?}", delay);
-    smol::Timer::after(delay).await;
+    Timer::after(delay).await;
     trace!("Delay completed fully");
-    Ok(None)
+    None
+}
+
+// dragEndDelay time should be cut short by a pointer or scoll gesture;
+// this function listens on the channel for either a pointer button press,
+// a scoll event, or a non-3-finger gesture, and exits when it gets one
+async fn listen_for_signal(rx: &mut Receiver<ControlSignal>) -> Option<ControlSignal> {
+
+    // function blocks until signal is received
+    // since ControlSignal is the only thing
+    // ever sent in the channel, there's no need to
+    // check that that's what we received
+    debug!("Listening for cancel signal...");
+    trace!("Size of buffer currently: {}", rx.len());
+    let sig = rx.recv().await?;
+    debug!("Signal received: {:?}", sig);
+    Some(sig)
 }
 
 impl Clone for VirtualTrackpad {
     /// This clone() can theoretically panic since there is an expect() in 
     /// its definition. This is because `try_cloned_to_owned`, from `std::io`,
-    /// utilizes libc's `fnctl`, which can fail, but will only do so if the 
+    /// utilizes libc's `fnctl`, which can fail, but will only do so if 
     /// duplicating the file descriptor would exceed the maximum number of 
-    /// file descriptors to be opened (or if the arguments to it are invalid, 
-    /// but the Rust method takes no arguments except for a known-valid FD, 
-    /// so those arguments are controlled by the std library).
+    /// file descriptors to be opened (or if the arguments to it are invalid; 
+    /// the Rust method, however, takes no arguments except for a known-valid FD, 
+    /// so those arguments are controlled by the `std` library).
     /// 
     /// This makes it as safe as any other file-system function to call, since 
-    /// it only fails when there is a resource limitation issue (which would be 
-    /// a rare and system-wide problem).
+    /// it only fails when there is a severe resource limitation issue (which 
+    /// would be a rare and system-wide problem).
     /// 
     /// Note that the boolean `mouse_is_down` is *copied*, **not** passed by 
     /// reference, for simplicity. 
@@ -157,7 +148,6 @@ impl Clone for VirtualTrackpad {
 
         VirtualTrackpad {
             handle: UInputHandle::new(File::from(uinput_fd)),
-            rx: self.rx.clone(),
             mouse_is_down: self.mouse_is_down
         }
     }
@@ -188,7 +178,7 @@ impl VirtualTrackpad
         Ok(())
     }
 
-    pub fn mouse_up(&mut self) -> Result<(), VtpError> {   
+    pub fn mouse_up(&mut self) -> Result<(), std::io::Error> {   
 
         let events = [
             InputEvent::from(
@@ -207,6 +197,8 @@ impl VirtualTrackpad
         self.handle.write(&events)?;
         self.mouse_is_down = false;
 
+        debug!("mouse_up written from simple mouse_up fn");
+
         Ok(())
     }
 
@@ -216,11 +208,14 @@ impl VirtualTrackpad
     /// thread will not panic, and will not stop unless either it's 
     /// sent a `ControlSignal::TerminateThread`, or an error was 
     /// raised. So if it ends prematurely, it's because of an error.
-    pub async fn handle_mouse_up_timeout(&mut self, delay: Duration) -> Result<(), VtpError> {
+    pub async fn handle_mouse_up_timeout(&mut self, delay: Duration, mut rx: Receiver<ControlSignal>) -> Result<(), std::io::Error> {
         
         loop {
             trace!("starting new loop of handle_mouse_up_timeout");
-            let ctl_sig = self.rx.recv().await?;
+            let ctl_sig = match rx.recv().await {
+                Some(sig) => sig,
+                None => break
+            };
             debug!("sig recv'd in outer loop: {:?}", ctl_sig);
 
             // handle signals received during outer loop
@@ -237,7 +232,7 @@ impl VirtualTrackpad
 
             // handle signals received during timer loop
             // that can't be handled within that scope
-            match self.run_timer(delay).await? {
+            match self.run_timer(delay, &mut rx).await {
                 Some(signal) => {
                     match signal {
                         CancelMouseUp => continue,
@@ -258,7 +253,7 @@ impl VirtualTrackpad
     
     /// A simple, blocking mouse_up, but with a set, blocking, uncancellable delay. 
     /// `delay` is measured in milliseconds.
-    pub fn mouse_up_delay_blocking(&mut self, delay: Duration) -> Result<(), VtpError> {
+    pub fn mouse_up_delay_blocking(&mut self, delay: Duration) -> Result<(), std::io::Error> {
         
         std::thread::sleep(delay);
 
@@ -334,45 +329,24 @@ impl VirtualTrackpad
         Ok(())
     }
 
-    
-    // dragEndDelay time should be cut short by a pointer or scoll gesture;
-    // this function listens on the channel for either a pointer button press,
-    // a scoll event, or a non-3-finger gesture, and exits when it gets one
-    async fn listen_for_signal(&self) -> Result<Option<ControlSignal>, RecvError> {
-
-        // function blocks until signal is received
-        // since ControlSignal is the only thing
-        // ever sent in the channel, there's no need to
-        // check that that's what we received
-        debug!("Listening for cancel signal...");
-        trace!("Size of buffer currently: {}", self.rx.len());
-        let sig = self.rx.recv().await?;
-        debug!("Signal received: {:?}", sig);
-        Ok(Some(sig))
-    }
-
 
     /// A timer that can be cancelled or reset via a signal in the channel. The return value
-    /// is what signal was received, if any, so they 
-    async fn run_timer(&self, delay: Duration) -> Result<Option<ControlSignal>, RecvError>{
+    /// is what signal was received, if any, except for `RestartTimer`, since it can be handled 
+    /// within the function.
+    async fn run_timer(&self, delay: Duration, rx: &mut Receiver<ControlSignal>) -> Option<ControlSignal> {
         loop {
-            // returns the output of the function that returns first
-            let signal_opt = plain_timeout(delay)
-                .or(self.listen_for_signal())
+            // catches the output of the function that returns first
+            let signal = plain_timeout(delay)
+                .or(listen_for_signal(rx))
                 .await?;
             
-            match signal_opt {
-                Some(signal) => {
-                    match signal {
-                        RestartTimer => continue,  
-                        // function exits, lets the outer loop handle the other signals
-                        _ => return Ok(Some(signal)), 
-                    }
-                },
-                None => break
+            match signal {
+                RestartTimer => continue,  
+                // function exits, lets the outer loop handle the other signals
+                // covers `CancelTimer` arm, since the behavior would be identical
+                _ => return Some(signal), 
             }
         }
-        Ok(None)
     }
 
     pub fn destruct(self) -> Result<(), std::io::Error> {
