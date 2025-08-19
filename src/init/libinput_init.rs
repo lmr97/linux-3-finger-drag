@@ -31,44 +31,51 @@ impl LibinputInterface for Interface {
 }
 
 
-fn bind_to_real_trackpad(tp_udev_name: String) -> Result<Libinput, Error> {
+/// Add devices to `Libinput` struct. 
+fn bind_to_real_trackpads(trackpads: Vec<input::Device>) -> Result<Libinput, Error> {
 
-    let mut real_trackpad = Libinput::new_from_path(Interface);
+    let mut real_trackpads = Libinput::new_from_path(Interface);
 
-    match real_trackpad.path_add_device(&format!("/dev/input/{tp_udev_name}")) {
+    for tp_dev in trackpads {
+        
+        match real_trackpads.path_add_device(&format!("/dev/input/{}", tp_dev.sysname())) {
 
-        Some(real_dev) => {
-            info!("Touchpad found and loaded.");
-            debug!("The touchpad device found: \"{}\" (udev path: /dev/input/{}).", 
-                real_dev.name(), real_dev.sysname()
-            );
-            Ok(real_trackpad)
-        },
-        None => {
-            error!("Could not load the touchpad device \
-                named `/dev/input/{tp_udev_name}`. It may also be a permissions \
-                error, but the underlying crate (input.rs) does not raise \
-                errors when a device cannot be loaded, so it's unclear. \
-                Please submit a Github issue at https://github.com/lmr97/linux-3-finger-drag/issues \
-                whether you sort this out or not, so as to help others in the \
-                same situation, and help me develop a better program. Thank \
-                you for trying it out"
-            );
-            Err(
-                Error::new(
-                    ErrorKind::AddrNotAvailable, 
-                    "trackpad found, could not bind"
+            Some(real_dev) => {
+                info!("A touchpad found and loaded.");
+                debug!("The touchpad device found: \"{}\" (udev path: /dev/input/{}).", 
+                    real_dev.name(), real_dev.sysname()
+                );
+            },
+            None => {
+                error!("Could not load the touchpad device \
+                    at `/dev/input/{}`. It may also be a permissions \
+                    error, but the underlying crate (input.rs) does not raise \
+                    errors when a device cannot be loaded, so it's unclear. \
+                    Please submit a Github issue at https://github.com/lmr97/linux-3-finger-drag/issues \
+                    whether you sort this out or not, so as to help others in the \
+                    same situation, and help me develop a better program. Thank \
+                    you for trying it out",
+                    tp_dev.sysname()
+                );
+                return Err(
+                    Error::new(
+                        ErrorKind::AddrNotAvailable, 
+                        "trackpad found, could not bind"
+                    )
                 )
-            )
+            }
         }
     }
+
+    Ok(real_trackpads)
 }
 
 
+/// Produce the correct error and logs to pinpoint the cause of the issue. 
 fn raise_correct_error(devices_added: u8) -> Result<Libinput, std::io::Error> {
 
     // Since the `input` crate does not give any errors from 
-    // udev_assign_seat() even on failure, so we've gotta figure 
+    // udev_assign_seat() even on failure, we've gotta figure 
     // it out ourselves! This will not return `Ok(Libinput)` in any
     // control path; the return type is chosen only for compatibility
     // with its caller, `find_real_trackpad()`.
@@ -172,8 +179,10 @@ fn raise_correct_error(devices_added: u8) -> Result<Libinput, std::io::Error> {
 }
 
 
-
-pub fn find_real_trackpad() -> Result<Libinput, std::io::Error> {
+/// Find all devices that function as trackpads, returning
+/// a `Libinput` struct that will receive events from all
+/// trackpads.
+pub fn find_real_trackpads() -> Result<Libinput, std::io::Error> {
 
     let mut all_inputs: Libinput = Libinput::new_with_udev(Interface);
     all_inputs.udev_assign_seat("seat0").unwrap();   // will not throw an error on failure!
@@ -185,20 +194,20 @@ pub fn find_real_trackpad() -> Result<Libinput, std::io::Error> {
     
     // Libinput adds "touchpad" to the device you use for a trackpad.
     // This finds theat device among all active ones on your computer.
-    let trackpad_find_opt = all_inputs.find(
+    let all_trackpads: Vec<input::Device> = all_inputs.filter(
         |event| {
             dev_added_count += 1;
             event.device().has_capability(Pointer) 
             && event.device().has_capability(Gesture)
-            // virtual trackpad only has "pointer" capability
+            // virtual trackpad only has "pointer" capability,
+            // so that will not be added here
         }
-    );
-    
-    let udev_name = match trackpad_find_opt {
+    ).map(|event| event.device())
+    .collect();
 
-        Some(tp_add_ev) => tp_add_ev.device().sysname().to_string(),
-        None => return raise_correct_error(dev_added_count)
-    };
+    if all_trackpads.len() == 0 { 
+        return raise_correct_error(dev_added_count); 
+    }
 
-    bind_to_real_trackpad(udev_name)
+    bind_to_real_trackpads(all_trackpads)
 }

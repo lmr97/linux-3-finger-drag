@@ -42,7 +42,7 @@ async fn main() -> Result<(), GtError> {
 
     // using a match case here instead of a `?` here so the program can destruct 
     // the virtual trackpad before it exits
-    let main_result = match libinput_init::find_real_trackpad() {
+    let main_result = match libinput_init::find_real_trackpads() {
 
         Ok(real_trackpad) => {
 
