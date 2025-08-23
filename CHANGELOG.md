@@ -1,14 +1,19 @@
 # Changelog
 
-## 1.5.0 - 2025-08-11
+## 1.5.0 - 2025-08-23
 
 ### Added
 
-- Add auto cancelation of drag end delay upon non-three-fingered gesture
+- Add auto cancelation of drag end delay upon non-three-fingered gesture (issue #12)
+- Add `udev` rule for restarting systemd service when new trackpad is connected to the laptop (issue #13)
 
 ### Removed
 
-- Remove option `failFast`; operation continues if initialization is successful, only logging errors, and not crashing
+- Remove option `failFast`; operation will continue if initialization is successful, only logging errors, and not crashing
+
+### Fixed
+
+- Fix pointer not moving on Fedora machines running KDE (issue #9)
 
 ## 1.4.1 - 2025-07-27
 
