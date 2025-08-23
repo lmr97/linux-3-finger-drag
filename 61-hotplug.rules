@@ -1,0 +1,4 @@
+# this rule WILL NOT RUN until you substitute <username_here>
+# for your username.
+ACTION=="add", SUBSYSTEM=="input", RUN+="/usr/bin/systemctl --user -M <username here>@.host restart three-finger-drag.service"
+ACTION=="remove", SUBSYSTEM=="input", RUN+="/usr/bin/systemctl --user -M <username here>@.host restart three-finger-drag.service"
