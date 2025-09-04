@@ -1,1 +1,1 @@
-KERNEL=="uinput", GROUP=="input", MODE="0660", TAG+="uaccess"
+KERNEL=="uinput", GROUP="input", MODE="0660", TAG+="uaccess"
