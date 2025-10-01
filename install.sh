@@ -7,14 +7,12 @@
 # I want the changes to be consistent
 LIBINPUT_INSTALLED_FLAG="--libinput-installed"
 
-echo -ne "Verifying prerequisites...                      "
-if [[ $(whoami) != "root" ]]; then
-    echo -e "[\e[0;31m FAIL \e[0m]"
-    echo -e "\n\e[0;31mFatal\e[0m: Root privileges are needed to install this program \
-        and configure the relevant settings (including kernel modules to load at boot)." 
-    exit 1
-fi
-
+# echo multi-line string (standard echo doesn't work well with tabs)
+# this also makes sure the printed lines wrap on spaces, not in the
+# middle of words
+echo-mls() {
+    echo -e $1 | fold -s -w $(( $(tput cols) - 5 ))
+}
 
 ensure-libinput() {
     # determine package manager
@@ -55,11 +53,11 @@ ensure-libinput() {
 
     if [[ $SEARCH_CMD = "uncommon" || -z $SEARCH_CMD ]]; then
         echo -e "[\e[0;31m FAIL \e[0m]"
-        echo -e "\nIt looks like you're on an uncommon distribution, which the automatic \
+        echo-mls "\nIt looks like you're on an uncommon distribution, which the automatic \
             installer in this script doesn't support (yet). So go ahead and install the \
             libinput development library (it should be named something like 'libinput-dev' \
             in your distribution's package repo), and when that's done, come back and \
-            re-run this script with the flag $LIBINPUT_INSTALLED_FLAG"
+            re-run this script with the $LIBINPUT_INSTALLED_FLAG flag."
         exit 127
 
     elif [[ -z $($SEARCH_CMD 2> /dev/null) ]]; then
@@ -97,7 +95,7 @@ ensure-libinput() {
 
         if [[ $INSTALL_CMD = "uncommon" || -z $SEARCH_CMD ]]; then
             echo -e "[\e[0;31m FAIL \e[0m]"
-            echo -e "\nIt looks like you're on an uncommon distribution, which the automatic \
+            echo-mls "\nIt looks like you're on an uncommon distribution, which the automatic \
                 installer in this script doesn't support (yet). So go ahead and install the \
                 libinput development library (it should be named something like 'libinput-dev' \ 
                 in your distribution's package repo), and when that's done, come back and \
@@ -108,7 +106,7 @@ ensure-libinput() {
             $INSTALL_CMD > /dev/null 2>&1
             if [[ $? -ne 0 ]]; then
                 echo -e "[\e[0;31m FAIL \e[0m]"
-                echo -e "\nIt looks like there was an issue with installing the libinput development \
+                echo-mls "\nIt looks like there was an issue with installing the libinput development \
                     library, which were not available on the system when this script started. \
                     They need to be installed prior to the installation of this program, so go \
                     ahead and install the libinput development library (it should be named \
@@ -118,20 +116,31 @@ ensure-libinput() {
                 exit 127
             fi
         fi
+
+        echo -en "\r\e[0;32mInstalled\e[0m. Checking other pre-reqs...           "
     fi
 }
 
+# don't run if not root
+if [[ $(whoami) != "root" ]]; then
+    echo-mls "\n\e[0;31mFatal\e[0m: Root privileges are needed to install this program \
+        and configure the relevant settings (including kernel modules to load at boot)." 
+    exit 1
+fi
+
 # 1. Check if libinput dev library is installed
 if [[ $1 != "$LIBINPUT_INSTALLED_FLAG" ]]; then
+    echo -ne "Verifying prerequisites...                      "
     ensure-libinput
 else
-    echo -en "\r\e[0;33mSkipping check for libinput dev library...      \e[0m"
+    echo -e "\r\e[0;33mSkipping check for libinput dev library\e[0m...      [\e[0;32m DONE \e[0m]"
+    echo -ne "Verifying prerequisites...                      "
 fi
 
 # verify CWD is the repo folder
 if [[ ${PWD##*/} != "linux-3-finger-drag" ]]; then
     echo -e "[\e[0;31m FAIL \e[0m]"
-    echo -e "\n\e[0;31mFatal\e[0m: This script needs to be run from the repo directory \
+    echo-mls "\n\e[0;31mFatal\e[0m: This script needs to be run from the repo directory \
         (linux-3-finger-drag) to run properly. Either return to that directory, \
         or, if you're already there, change the name back to linux-3-finger-drag."
     exit 1
@@ -168,11 +177,12 @@ echo
 
 ## this needs to be done as the user, or else is messes up the permissions.
 ## Cargo should never really be run as root anyway.
-su $SUDO_USER -c 'cargo build --release'
+REPO_DIR=$PWD
+su -l $SUDO_USER -c "cd $REPO_DIR; cargo build --release"
 CARGO_EXIT_CODE=$?
 
 if [ $CARGO_EXIT_CODE -ne 0 ]; then
-    echo -e "\n\e[0;33mHint:\e[0m You probably need to install the libinput development library, \
+    echo-mls "\n\e[0;33mHint:\e[0m You probably need to install the libinput development library, \
         which package is typically named something like 'libinput-dev' for your distribution. \
         Some distributions bundle it with their libinput package, too. Once you've installed \
         the package, you can re-run this script with the $LIBINPUT_INSTALLED_FLAG flag (it \
@@ -241,14 +251,14 @@ else
     echo -e "[\e[0;33m WARN \e[0m]"
     echo -e "[\e[0;33m WARN \e[0m]"
     echo -e "\n\e[0;33mWarning: Your system doesn't use SystemD.\e[0m"
-    echo "Currently, only SystemD installation is automated by this install script, \
+    echo-mls "Currently, only SystemD installation is automated by this install script, \
         so you'll have to use create and enable the service for your init system."
     echo
     echo "You may also have to ensure that the uinput kernel module loads on boot."
     echo "The config has been added in /etc/modules-load.d/uinput.conf."
     echo "The config has been added in /etc/modules-load.d/uinput.conf."
     echo
-    echo "(If I get enough requests for it I'll adapt this install script for other inits, \
+    echo-mls "(If I get enough requests for it I'll adapt this install script for other inits, \
         probably starting with OpenRC. Also, feel free to submit a pull request for this.)"
 fi
 
