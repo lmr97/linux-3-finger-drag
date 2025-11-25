@@ -3,6 +3,5 @@
     "dragEndDelay": 0,
     "logFile": "stdout",
     "logLevel": "info",
-    "minMotion": 0.2,
     "responseTime": 5
 }
