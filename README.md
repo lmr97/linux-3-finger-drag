@@ -196,6 +196,8 @@ Below are the fields that can be configured, with the values given here being th
 
 If the JSON is malformed in the found configuration file, or the file is simply not found, the defaults listed above are loaded instead, and the program continues execution. 
 
+The configuration values will be hot-reloaded when `3fd-config.json` is updated, except for logging configurations. A change to logging configuration values requires a restart of the program (currently; open to PRs on this). 
+
 ### `acceleration` (float)
 This is a speedup multiplier which will be applied to all 3-finger gesture movements. Defaults to `1.0`.
 
