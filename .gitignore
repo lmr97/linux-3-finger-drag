@@ -2,3 +2,4 @@
 test.*
 *.py
 *.log
+archive/
