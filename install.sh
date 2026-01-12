@@ -1,7 +1,7 @@
-###########################
-# linux-three-finger-drag #
-#   Installation Script   #
-###########################
+#############################
+#  linux-three-finger-drag  #
+#    Installation Script    #
+#############################
 
 # this flag pops up in several places, so if I change it, 
 # I want the changes to be consistent
