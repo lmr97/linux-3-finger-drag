@@ -1,3 +1,5 @@
+#!/bin/bash
+
 #############################
 #  linux-three-finger-drag  #
 #    Installation Script    #
