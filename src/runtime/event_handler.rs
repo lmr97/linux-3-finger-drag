@@ -109,7 +109,7 @@ impl GestureTranslator {
         match event {
             Event::Gesture(gest_ev) => {
 
-                // we don't care about gestures with lower finger-counts
+                // stop 3-finger drag on 1- and 2-finger gestures
                 if gest_ev.finger_count() < 3 {
                     debug!("Gesture is 4-fingered (or more), ignoring");
                     self.mouse_up_now().await?

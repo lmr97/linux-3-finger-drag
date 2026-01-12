@@ -153,7 +153,7 @@ async fn run_main_event_loop(
             match event {
                 input::event::Event::Gesture(gest_ev) => {
 
-                    // we don't care about gestures with other finger-counts
+                    // we don't care about gestures with higher finger-counts
                     if gest_ev.finger_count() > 3 {
                         debug!("Gesture is 4-fingered (or more), ignoring");
                         continue;
