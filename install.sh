@@ -214,7 +214,7 @@ if [[ -n $(ps -p 1 | grep systemd) ]]; then
     su $SUDO_USER -c '\
         mkdir -p $HOME/.config/systemd/user; \
         cp three-finger-drag.service $HOME/.config/systemd/user/; \
-        systemctl --user enable --now three-finger-drag.service '
+        systemctl --quiet --user enable --now three-finger-drag.service '
     echo -e "[\e[0;32m DONE \e[0m]"
 
 else
