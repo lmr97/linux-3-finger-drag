@@ -10,7 +10,7 @@ LIBINPUT_INSTALLED_FLAG="--libinput-installed"
 # echo multi-line string (standard echo doesn't work well with tabs)
 # this also makes sure the printed lines wrap on spaces, not in the
 # middle of words
-echo_mls() {
+echo_mls () {
     echo -e $1 | fold -s -w $(( $(tput cols) - 5 ))
 }
 
