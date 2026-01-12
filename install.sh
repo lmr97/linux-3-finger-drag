@@ -14,7 +14,7 @@ echo_mls () {
     echo -e $1 | fold -s -w $(( $(tput cols) - 5 ))
 }
 
-ensure-libinput () {
+ensure_libinput () {
     # determine package manager
     SEARCH_CMD="uncommon"  # default
 
@@ -104,7 +104,7 @@ fi
 # 1. Check if libinput dev library is installed
 if [[ $1 != "$LIBINPUT_INSTALLED_FLAG" ]]; then
     echo -ne "Verifying prerequisites...                      "
-    ensure-libinput
+    ensure_libinput
 else
     echo -e "\r\e[0;33mSkipping check for libinput dev library\e[0m...      [\e[0;32m DONE \e[0m]"
     echo -ne "Verifying prerequisites...                      "
