@@ -3,6 +3,7 @@ use std::{
         Arc, atomic::{AtomicBool, Ordering}
     }, time::SystemTime
 };
+use input::event::gesture::GestureEventTrait;
 use tokio::sync::mpsc::{self, Receiver};
 use signal_hook::{self, consts::{SIGINT, SIGTERM}, flag};
 use tracing::{debug, error, info, trace};
@@ -149,10 +150,21 @@ async fn run_main_event_loop(
         for event in &mut real_trackpad {
 
             trace!("Blocking in main()'s for loop");
+            match event {
+                input::event::Event::Gesture(gest_ev) => {
 
-            // do nothing on success (or ignored gesture)
-            if let Err(e) = translator.translate_gesture(event).await { 
-                error!("{:?}", e); 
+                    // we don't care about gestures with other finger-counts
+                    if gest_ev.finger_count() > 3 {
+                        debug!("Gesture is 4-fingered (or more), ignoring");
+                        continue;
+                    }
+                },
+                _ => {
+                    // do nothing on success (or ignored gesture)
+                    if let Err(e) = translator.translate_gesture(event).await { 
+                        error!("{:?}", e); 
+                    }
+                }
             }
 
             // Without being a `ControlSignal::TerminateThread` being sent

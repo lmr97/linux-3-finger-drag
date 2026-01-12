@@ -3,15 +3,9 @@ use std::time::Duration;
 //use smol::{channel::{RecvError, SendError, Sender}};
 use tokio::sync::mpsc::{error::SendError, Sender};
 use input::{
-    event::{
-        gesture::{
-            GestureEvent, 
-            GestureEventCoordinates, 
-            GestureEventTrait, 
-            GestureHoldEvent, 
-            GestureSwipeEvent
+    Event, event::gesture::{
+            GestureEvent, GestureEventCoordinates, GestureEventTrait, GestureHoldEvent, GestureSwipeEvent
         }
-    }, Event
 };
 
 
@@ -115,14 +109,13 @@ impl GestureTranslator {
         match event {
             Event::Gesture(gest_ev) => {
 
-                // we don't care about gestures with other finger-counts
-                if gest_ev.finger_count() != 3 {
-                    debug!("Gesture not three-fingered, releasing drag");
-                    return self.mouse_up_now().await;
+                // we don't care about gestures with lower finger-counts
+                if gest_ev.finger_count() < 3 {
+                    debug!("Gesture is 4-fingered (or more), ignoring");
+                    self.mouse_up_now().await?
                 }
-            
-                match gest_ev {
 
+                match gest_ev {
                     GestureEvent::Hold(gest_hold_ev) => self.handle_hold(gest_hold_ev).await,
                     GestureEvent::Swipe(swipe_ev) => self.handle_swipe(swipe_ev).await,
                     _ => self.mouse_up_now().await // just in case, so the drag isn't locked
