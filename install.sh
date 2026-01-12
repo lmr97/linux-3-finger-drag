@@ -14,7 +14,7 @@ echo_mls () {
     echo -e $1 | fold -s -w $(( $(tput cols) - 5 ))
 }
 
-ensure-libinput() {
+ensure-libinput () {
     # determine package manager
     SEARCH_CMD="uncommon"  # default
 
