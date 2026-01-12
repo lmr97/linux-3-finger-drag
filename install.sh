@@ -10,7 +10,7 @@ LIBINPUT_INSTALLED_FLAG="--libinput-installed"
 # echo multi-line string (standard echo doesn't work well with tabs)
 # this also makes sure the printed lines wrap on spaces, not in the
 # middle of words
-echo-mls() {
+function echo_mls() {
     echo -e $1 | fold -s -w $(( $(tput cols) - 5 ))
 }
 
@@ -38,7 +38,7 @@ ensure-libinput() {
 
     if [[ $SEARCH_CMD = "uncommon" || -z $SEARCH_CMD ]]; then
         echo -e "[\e[0;31m FAIL \e[0m]"
-        echo-mls "\nIt looks like you're on an uncommon distribution, which the automatic \
+        echo_mls "\nIt looks like you're on an uncommon distribution, which the automatic \
             installer in this script doesn't support (yet). So go ahead and install the \
             libinput development library (it should be named something like 'libinput-dev' \
             in your distribution's package repo), and when that's done, come back and \
@@ -68,7 +68,7 @@ ensure-libinput() {
 
         if [[ $INSTALL_CMD = "uncommon" || -z $SEARCH_CMD ]]; then
             echo -e "[\e[0;31m FAIL \e[0m]"
-            echo-mls "\nIt looks like you're on an uncommon distribution, which the automatic \
+            echo_mls "\nIt looks like you're on an uncommon distribution, which the automatic \
                 installer in this script doesn't support (yet). So go ahead and install the \
                 libinput development library (it should be named something like 'libinput-dev' \ 
                 in your distribution's package repo), and when that's done, come back and \
@@ -79,7 +79,7 @@ ensure-libinput() {
             $INSTALL_CMD > /dev/null 2>&1
             if [[ $? -ne 0 ]]; then
                 echo -e "[\e[0;31m FAIL \e[0m]"
-                echo-mls "\nIt looks like there was an issue with installing the libinput development \
+                echo_mls "\nIt looks like there was an issue with installing the libinput development \
                     library, which were not available on the system when this script started. \
                     They need to be installed prior to the installation of this program, so go \
                     ahead and install the libinput development library (it should be named \
@@ -96,7 +96,7 @@ ensure-libinput() {
 
 # don't run if not root
 if [[ $(whoami) != "root" ]]; then
-    echo-mls "\n\e[0;31mFatal\e[0m: Root privileges are needed to install this program \
+    echo_mls "\n\e[0;31mFatal\e[0m: Root privileges are needed to install this program \
         and configure the relevant settings (including kernel modules to load at boot)." 
     exit 1
 fi
@@ -113,7 +113,7 @@ fi
 # verify CWD is the repo folder
 if [[ ${PWD##*/} != "linux-3-finger-drag" ]]; then
     echo -e "[\e[0;31m FAIL \e[0m]"
-    echo-mls "\n\e[0;31mFatal\e[0m: This script needs to be run from the repo directory \
+    echo_mls "\n\e[0;31mFatal\e[0m: This script needs to be run from the repo directory \
         (linux-3-finger-drag) to run properly. Either return to that directory, \
         or, if you're already there, change the name back to linux-3-finger-drag."
     exit 1
@@ -154,7 +154,7 @@ su -l $SUDO_USER -c "cd $REPO_DIR; cargo build --release"
 CARGO_EXIT_CODE=$?
 
 if [ $CARGO_EXIT_CODE -ne 0 ]; then
-    echo-mls "\n\e[0;33mHint:\e[0m You probably need to install the libinput development library, \
+    echo_mls "\n\e[0;33mHint:\e[0m You probably need to install the libinput development library, \
         which package is typically named something like 'libinput-dev' for your distribution. \
         Some distributions bundle it with their libinput package, too. Once you've installed \
         the package, you can re-run this script with the $LIBINPUT_INSTALLED_FLAG flag (it \
@@ -218,13 +218,13 @@ if [[ -n $(ps -p 1 | grep systemd) ]]; then
 else
     echo -e "[\e[0;33m WARN \e[0m]"
     echo -e "\n\e[0;33mWarning: Your system doesn't use SystemD.\e[0m"
-    echo-mls "Currently, only SystemD installation is automated by this install script, \
+    echo_mls "Currently, only SystemD installation is automated by this install script, \
         so you'll have to use create and enable the service for your init system."
     echo
     echo "You may also have to ensure that the uinput kernel module loads on boot."
     echo "The config has been added in /etc/modules-load.d/uinput.conf."
     echo
-    echo-mls "(If I get enough requests for it I'll adapt this install script for other inits, \
+    echo_mls "(If I get enough requests for it I'll adapt this install script for other inits, \
         probably starting with OpenRC. Also, feel free to submit a pull request for this.)"
 fi
 
@@ -244,7 +244,7 @@ case "$answer" in
         echo -e "\n\e[0;33mWarning\e[0m: Not rebooting. The program will start working after the next boot."
     ;;
     *)
-        echo-mls "\n\e[0;33mWarning\e[0m: Response not recognized, not rebooting. The program will start \
+        echo_mls "\n\e[0;33mWarning\e[0m: Response not recognized, not rebooting. The program will start \
             working after the next boot."
 esac
 
