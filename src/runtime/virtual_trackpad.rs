@@ -31,7 +31,14 @@ use crate::runtime::event_handler::ControlSignal::{self, *};
 /// that is copied during cloning, for simplicity. 
 pub struct VirtualTrackpad {
     handle: UInputHandle<File>,
-    pub mouse_is_down: bool
+    pub mouse_is_down: bool,
+    // Leftover sub-pixel motion carried between events. libinput reports
+    // fractional swipe deltas; truncating each event to an integer (in
+    // mouse_move_relative) drops the fraction, which makes slow drags stick
+    // until a whole pixel accumulates within a single event. Carrying the
+    // remainder here keeps slow motion smooth and drift-free.
+    x_residual: f64,
+    y_residual: f64
 }
 
 
@@ -86,9 +93,11 @@ pub fn start_handler() -> Result<VirtualTrackpad, std::io::Error> {
     thread::sleep(time::Duration::from_millis(500));
 
     Ok(
-        VirtualTrackpad { 
-            handle: uhandle, 
-            mouse_is_down: false
+        VirtualTrackpad {
+            handle: uhandle,
+            mouse_is_down: false,
+            x_residual: 0.0,
+            y_residual: 0.0
         }
     )
 
@@ -148,7 +157,9 @@ impl Clone for VirtualTrackpad {
 
         VirtualTrackpad {
             handle: UInputHandle::new(File::from(uinput_fd)),
-            mouse_is_down: self.mouse_is_down
+            mouse_is_down: self.mouse_is_down,
+            x_residual: self.x_residual,
+            y_residual: self.y_residual
         }
     }
 }
@@ -280,30 +291,23 @@ impl VirtualTrackpad
     }
 
 
-    pub fn mouse_move_relative(&self, x_rel: f64, y_rel:f64) -> Result<(), std::io::Error> {
-        
-        // RelativeEvent::new() can only take integers, 
-        // so some precision must be lost. But this needs to be done 
-        // without bias, since x_rel and y_rel can be negative:
-        // so we truncate the values down (floor()) if they are positive,
-        // and truncate them up (ceil()) if they are negative.
-        // That way, they are truncated toward 0 regardless.
-        // 
-        // Why does this matter? Because it prevents the effect of the 
-        // origin (from which relative motion is calculated) seeming to 
-        // drift up or down the trackpad instead of staying where the 
-        // three finger drag started.
-        let x_rel_int = if x_rel > 0.0 {
-            x_rel.floor() as i32
-        } else {
-            x_rel.ceil() as i32
-        };
+    pub fn mouse_move_relative(&mut self, x_rel: f64, y_rel:f64) -> Result<(), std::io::Error> {
 
-        let y_rel_int = if y_rel > 0.0 {
-            y_rel.floor() as i32
-        } else {
-            y_rel.ceil() as i32
-        };
+        // RelativeEvent::new() can only take integers, so the fractional part
+        // of each delta can't be emitted this event. Rather than discard it
+        // (which makes slow drags stick, since sub-pixel deltas would truncate
+        // to 0 every event), accumulate it into a residual and carry it to the
+        // next event. trunc() truncates toward 0 just like the old floor()/
+        // ceil() split, so the residual stays in (-1, 1) and the origin never
+        // drifts up or down the trackpad from where the drag started.
+        self.x_residual += x_rel;
+        self.y_residual += y_rel;
+
+        let x_rel_int = self.x_residual.trunc() as i32;
+        let y_rel_int = self.y_residual.trunc() as i32;
+
+        self.x_residual -= x_rel_int as f64;
+        self.y_residual -= y_rel_int as f64;
 
         let events = [
             InputEvent::from(
