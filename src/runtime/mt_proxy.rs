@@ -36,10 +36,10 @@ const ABS_MT_POSITION_Y: u16 = 0x36;
 const MAX_SLOTS: usize = 16;
 const READ_BATCH: usize = 64;
 
-// Empirically-reasonable px-per-mm scale for turning the real finger delta
-// into cursor movement; this combines with the existing `acceleration`
-// config knob, so it doesn't need to be exact -- just a sane starting point.
-const PX_PER_MM: f64 = 4.0;
+// px-per-mm scale for turning the real finger delta into cursor movement;
+// combines with the `acceleration` config knob on top. 12.0 (4.0 x the
+// initial guess) is the value the user confirmed feels right live.
+const PX_PER_MM: f64 = 12.0;
 
 #[derive(Clone, Copy)]
 struct Slot {
