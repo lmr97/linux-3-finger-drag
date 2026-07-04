@@ -631,7 +631,7 @@ dependencies = [
 
 [[package]]
 name = "linux-3-finger-drag"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "async-io",
  "criterion",
