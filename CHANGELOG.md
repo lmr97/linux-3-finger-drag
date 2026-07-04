@@ -1,5 +1,132 @@
 # Changelog
 
+## 2.2.0 - 2026-07-04
+
+Production-hardening release.
+
+### Added
+
+- **Randomized invariant fuzzer**: 96 deterministic scenarios x 2500
+  steps of chaotic multi-finger input (with realistic tool-bit
+  reporting and random SYN_DROPPED resyncs), with a shadow model of the
+  synthetic clone verifying after every step that the clone's slot
+  state matches the machine's belief, button presses/releases pair
+  correctly, the clone never shows more fingers than the real pad, and
+  quiescence leaves no phantom touches, stuck tool bits, held button,
+  or scheduled wakeups. Mutation-tested (a deliberately broken machine
+  fails it immediately).
+- Config sanitization: out-of-range values (negative/zero/huge
+  acceleration, probeDelay > entryDebounce, multi-second delays) are
+  clamped with a logged warning instead of being applied blindly --
+  garbage in the config file can no longer produce a broken touchpad.
+- `--version` flag.
+- GitHub Actions CI: fmt, clippy -D warnings, tests (unit + fuzzer),
+  release build.
+
+### Changed
+
+- install.sh is shellcheck-clean; remaining unwraps in the state
+  machine converted to documented expects.
+
+## 2.1.0 - 2026-07-04
+
+Fixes flaky 4-finger vertical swipes (overview/grid gestures sometimes
+not registering, especially on fast swipes).
+
+### Fixed
+
+- **Late-4th-finger bailout**: on a fast/sloppy 4-finger swipe the 4th
+  finger often lands *after* the 50ms entry window, so the machine saw a
+  stable 3-finger touch and committed a drag -- eating the swipe. A 4th
+  finger arriving during a committed drag now aborts it and hands the
+  touch to the compositor mid-gesture (full slot + tool-state
+  introduction), so the remaining swipe motion still registers.
+- **Deferred button press** (`pressGrace`, default 75ms): the drag's
+  button press now fires at the first real drag motion or when the grace
+  expires, whichever is first -- so the bailout above normally happens
+  before any press, and no phantom click is ever sent. Stationary-hold
+  presses and the "3-finger hold = click" behavior are preserved (a
+  liftoff inside the grace presses+releases at liftoff).
+- **Tool-state consistency on suppress**: entering suppression from a
+  partially-relayed touch (e.g. 2 fingers settled, 3rd added to start a
+  drag) released the clone's MT slots but left BTN_TOUCH/BTN_TOOL_*
+  stuck pressed -- desyncing libinput's finger accounting, and (with
+  tap-to-click on) making the yanked touch read as a 2-finger tap =
+  phantom right-click. The clone's relayed key state is now tracked and
+  explicitly released alongside the slots.
+
+## 2.0.0 - 2026-07-03
+
+Major rework of this fork: the gesture logic is now a pure, fully
+unit-tested state machine, and the runtime is event-driven.
+
+### Fixed
+
+- **4-finger liftoff hijack**: the staggered liftoff at the tail of every
+  4-finger gesture passes through exactly 3 active fingers; that moment
+  was classified as a drag, producing a phantom left-click at the end of
+  4-finger swipes. Touches that ever exceeded 3 fingers can no longer
+  become drags.
+- **Phantom slots after SYN_DROPPED**: the kernel resync read MAX_SLOTS
+  entries regardless of the device's real slot range; zeroed tail entries
+  (tracking_id 0) counted as active touches. Snapshots are now sized to
+  the device's actual ABS_MT_SLOT range.
+- Resyncs now also *release* clone slots whose fingers lifted during the
+  dropped window (previously the clone could hold a phantom touch
+  forever), re-baseline an in-flight drag instead of applying the gap as
+  a cursor jump, and end a drag/buffered touch that fully lifted inside
+  the drop.
+- SYN_DROPPED handling now follows the evdev protocol (discard everything
+  up to and including the next SYN_REPORT before resyncing).
+- Log files are created if missing (logFile previously required the file
+  to already exist).
+
+### Added
+
+- **Pure gesture state machine** (`src/runtime/gesture.rs`) with an
+  injected clock, plus a regression test suite encoding every failure
+  mode this project has hit live (staggered touchdowns/liftoffs, phantom
+  taps, 4-finger transients, drag-lock misbehavior, resync edge cases).
+- **Software-in-the-loop integration test**: creates a fake touchpad via
+  uinput, drives the real binary against it with `--device`, and asserts
+  on the actual clone/virtual-mouse output streams.
+- `--device /dev/input/eventN` CLI flag (skips auto-discovery).
+- Correct-by-construction **drag-lock** (`dragEndDelay` > 0): a new
+  3-finger touch inside the window resumes the same held drag; any other
+  touch releases the button *before* its events are relayed — the
+  regression that shipped with the first drag-lock attempt (1-finger
+  motion dragging things after a drag) is now structurally impossible,
+  and tested.
+- Sub-pixel motion carry: slow drags no longer lose the fractional
+  remainder of each frame's motion to integer truncation.
+- In-process touchpad re-discovery on ENODEV (device re-enumeration no
+  longer kills the service), with `Restart=on-failure` in the unit as
+  backstop.
+- A `phys` marker (`linux-3-finger-drag/proxy`) on the synthetic clone so
+  discovery can never grab our own clone (includes a manual UI_SET_PHYS
+  ioctl: input-linux 0.7's binding mis-encodes the ioctl size).
+
+### Changed
+
+- **Event-driven runtime**: the old 5 ms busy-poll loop (plus its config
+  mtime check 200x/s) is replaced by a single-threaded tokio loop that
+  sleeps on the device fd and on exact gesture-decision deadlines. Idle
+  CPU is zero; decisions land on time instead of on the next poll tick.
+- Touchpad discovery inspects evdev capabilities directly; the `input`
+  (libinput FFI) and unmaintained `users` crates are gone, as are
+  `signal-hook`, `futures-lite`, `async-io`, and the `criterion` dev-dep.
+  No C library dependencies remain.
+- The drag-end timer thread, control-signal channel, and
+  `VirtualTrackpad::clone` machinery are gone; the delay lives in the
+  state machine.
+- Release profile builds with LTO.
+
+### Removed
+
+- `responseTime` config knob (no poll interval exists anymore; leftover
+  entries in existing config files are ignored).
+- `response-map.md` (described the pre-proxy libinput design).
+
 ## 1.7.0 - 2026-07-03
 
 ### Fixed

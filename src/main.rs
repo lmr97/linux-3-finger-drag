@@ -1,32 +1,98 @@
-use std::{
-    sync::{
-        Arc, atomic::{AtomicBool, Ordering}
-    }, time::SystemTime
-};
-use tokio::sync::mpsc::{self, Receiver};
-use signal_hook::{self, consts::{SIGINT, SIGTERM}, flag};
-use tracing::{debug, error, info, trace};
+use std::io;
+use std::os::fd::{AsRawFd, RawFd};
+use std::time::Duration;
+
+use tokio::io::unix::AsyncFd;
+use tokio::io::Interest;
+use tokio::signal::unix::{signal, SignalKind};
+use tracing::{debug, info, warn};
 use tracing_subscriber::fmt::time::ChronoLocal;
 
 use linux_3_finger_drag::{
-    init::{config, libinput_init},
-    runtime::{
-        event_handler::{ControlSignal, GestureTranslator, GtError}, 
-        virtual_trackpad
-    }
+    init::{config, discovery},
+    runtime::{gesture::GestureMachine, mt_proxy::MtProxy, virtual_trackpad},
 };
 
+/// How often the config file's mtime is checked for hot reload.
+const CFG_POLL: Duration = Duration::from_secs(2);
+/// Hotplug: how long to keep retrying discovery after the touchpad
+/// disappears (device re-enumeration, e.g. around suspend), before
+/// giving up and letting the service manager restart us.
+const REDISCOVER_ATTEMPTS: u32 = 60;
+const REDISCOVER_BACKOFF: Duration = Duration::from_millis(500);
 
-#[tokio::main]
-async fn main() -> Result<(), GtError> {
+struct Args {
+    /// Explicit touchpad device path (skips discovery). Mainly for the
+    /// integration test harness, but also useful on multi-touchpad
+    /// machines.
+    device: Option<String>,
+}
 
-    let cfg_file = config::get_config_file_path()?; 
-    let cfg_last_modified = std::fs::metadata(cfg_file)?.modified()?;
+fn parse_args() -> Result<Args, String> {
+    let mut args = Args { device: None };
+    let mut iter = std::env::args().skip(1);
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--device" => {
+                args.device = Some(
+                    iter.next()
+                        .ok_or_else(|| "--device requires a path argument".to_string())?,
+                );
+            }
+            "--version" | "-V" => {
+                println!("linux-3-finger-drag {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
+            "--help" | "-h" => {
+                println!(
+                    "linux-3-finger-drag [--device /dev/input/eventN]\n\n\
+                    Turns a sustained 3-finger touchpad touch into a drag \
+                    (mouse-button-held movement).\n\n\
+                      --device PATH   proxy this evdev device instead of \
+                    auto-discovering the touchpad\n\
+                      --version       print the version and exit"
+                );
+                std::process::exit(0);
+            }
+            other => return Err(format!("unrecognized argument: {other}")),
+        }
+    }
+    Ok(args)
+}
+
+/// Wraps just the raw fd for readiness-polling; the proxy keeps
+/// ownership of the actual File.
+struct FdWatch(RawFd);
+impl AsRawFd for FdWatch {
+    fn as_raw_fd(&self) -> RawFd {
+        self.0
+    }
+}
+
+/// Sleep until `deadline`, or forever if there is none. Used as a
+/// select! arm so gesture-decision deadlines fire exactly on time.
+async fn sleep_until_opt(deadline: Option<std::time::Instant>) {
+    match deadline {
+        Some(t) => tokio::time::sleep_until(tokio::time::Instant::from_std(t)).await,
+        None => std::future::pending::<()>().await,
+    }
+}
+
+fn is_unplug(err: &io::Error) -> bool {
+    err.raw_os_error() == Some(libc::ENODEV)
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<(), io::Error> {
+    let args = parse_args().map_err(|e| {
+        eprintln!("{e}\nTry --help.");
+        io::Error::new(io::ErrorKind::InvalidInput, e)
+    })?;
 
     let configs = config::init_cfg();
 
     match config::init_file_logger(configs.clone()) {
-        Some(logger) => logger.init(), 
+        Some(logger) => logger.init(),
         None => {
             tracing_subscriber::fmt()
                 .with_writer(std::io::stdout)
@@ -35,144 +101,136 @@ async fn main() -> Result<(), GtError> {
                 .init();
         }
     };
-    println!("[PRE-LOG: INFO]: Logger initialized!"); 
 
-    // handling SIGINT and SIGTERM
-    let should_exit = Arc::new(AtomicBool::new(false));
-    flag::register(SIGTERM, Arc::clone(&should_exit)).unwrap();
-    flag::register(SIGINT,  Arc::clone(&should_exit)).unwrap();
-
-    let (sender, recvr) = mpsc::channel::<ControlSignal>(3);
     let mut vtrackpad = virtual_trackpad::start_handler()?;
 
-    info!("Searching for the trackpad on your device...");
+    // run() holds the real event loop; wrapping it like this guarantees
+    // the virtual devices are destroyed on the way out no matter how it
+    // returns (including the button being released if a drag was live).
+    let result = run(&args, configs, &mut vtrackpad).await;
 
-    info!("end evdev search");
-    // using a match case here instead of a `?` here so the program can destruct 
-    // the virtual trackpad before it exits
-    let main_result = match libinput_init::find_real_trackpads() {
-
-        Ok(real_trackpad) => {
-
-            let translator = GestureTranslator::new(
-                vtrackpad.clone(), 
-                configs.clone(),
-                sender
-            );
-            run_main_event_loop(
-                translator, 
-                recvr, 
-                &should_exit, 
-                real_trackpad, 
-                cfg_last_modified
-            ).await
-        },
-        Err(e) => Err(GtError::from(e))
-    };
-
-    // the program arrives here if either a signal is received, 
-    // or there was some issue during initialization
     info!("Cleaning up and exiting...");
-    vtrackpad.mouse_up()?;      // just in case
-    vtrackpad.destruct()?;      // we don't need virtual devices cluttering the system
-    
+    vtrackpad.mouse_up()?; // just in case a drag was in flight
+    vtrackpad.destruct()?;
     info!("Clean up successful.");
-    main_result
+    result
 }
 
+async fn run(
+    args: &Args,
+    mut cfg: config::Configuration,
+    vtp: &mut virtual_trackpad::VirtualTrackpad,
+) -> Result<(), io::Error> {
+    let mut sigterm = signal(SignalKind::terminate())?;
+    let mut sigint = signal(SignalKind::interrupt())?;
 
-// This function is placed in `main.rs` since it's essentially a 
-// part of `main`, and I wanted to break it out so the `main` isn't
-// too sprawling
-async fn run_main_event_loop(
-    mut translator: GestureTranslator,
-    recvr: Receiver<ControlSignal>,
-    should_exit: &Arc<AtomicBool>,
-    mut real_trackpad: input::Libinput, 
-    mut cfg_last_modified: SystemTime
-    
-) -> Result<(), GtError> {
+    let cfg_path = config::get_config_file_path()?;
+    let mut cfg_mtime = std::fs::metadata(&cfg_path).and_then(|m| m.modified()).ok();
+    let mut cfg_timer = tokio::time::interval(CFG_POLL);
+    cfg_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    // spawn 1 separate thread to handle mouse_up_delay timeouts
-    debug!("Creating new thread to manage drag end timer");
-    let mut vtp_clone = translator.vtp.clone();
-    let delay = translator.cfg.drag_end_delay;
-
-    let fork_fn = async move {
-        vtp_clone.handle_mouse_up_timeout(delay, recvr)
-            .await
-            .map_err(GtError::from)
-    };
-
-    let mouse_up_listener = tokio::spawn(fork_fn);
-    let cfg_file_path = config::get_config_file_path()?; 
-
-    info!("linux-3-finger-drag started successfully!");
-
-    loop {
-        // this is to keep the infinite loop from filling out into
-        // entire CPU core, which it will do even on no-ops.
-        std::thread::sleep(translator.cfg.response_time);
-
-        // check if the configuration was modified, and if so, update configs in memory
-        let cfg_last_modified_update = std::fs::metadata(&cfg_file_path)?.modified()?;
-
-        if cfg_last_modified_update > cfg_last_modified {
-
-            let new_cfg = config::init_cfg();
-            translator.cfg = new_cfg.clone();
-
-            cfg_last_modified = cfg_last_modified_update;
-        }
-        
-        // check if the configuration was modified, and if so, update configs in memory
-        let cfg_last_modified_update = std::fs::metadata(&cfg_file_path)?.modified()?;
-
-        if cfg_last_modified_update > cfg_last_modified {
-
-            let new_cfg = config::init_cfg();
-            translator.cfg = new_cfg.clone();
-
-            cfg_last_modified = cfg_last_modified_update;
-        }
-
-
-        // handle interrupts
-        if should_exit.load(Ordering::Relaxed) {
-            break;
-        }
-        
-        if let Err(e) = real_trackpad.dispatch() {
-            error!("A {} error occured in reading device buffer: {}", e.kind(), e);
-        }
-
-        for event in &mut real_trackpad {
-
-            trace!("Blocking in main()'s for loop");
-
-            // do nothing on success (or ignored gesture)
-            if let Err(e) = translator.translate_gesture(event).await { 
-                error!("{:?}", e); 
+    // Outer loop: one iteration per (re)acquired touchpad. Re-entered
+    // only if the device disappears (ENODEV) and rediscovery succeeds.
+    'device: loop {
+        let path = match &args.device {
+            Some(p) => p.clone(),
+            None => {
+                info!("Searching for the trackpad on your device...");
+                let paths = discovery::find_real_trackpads()?;
+                if paths.len() > 1 {
+                    warn!(
+                        "Found {} touchpads; only proxying the first one ({}).",
+                        paths.len(),
+                        paths[0]
+                    );
+                }
+                paths[0].clone()
             }
+        };
 
-            // Without being a `ControlSignal::TerminateThread` being sent
-            // into the channel, the other thread only finishes when
-            // an error is raised. It has been designed not to panic. 
-            // the value the thread returns is a `Result`, so the this  
-            // conditional propagates the Result from the fork.
-            if mouse_up_listener.is_finished() {
-                let fork_err = mouse_up_listener.await?.unwrap_err();
-                error!("Error raised in fork: {:?}", fork_err);
-                return Err(fork_err);
+        let mut proxy = MtProxy::new(&path)?;
+        let mut machine = GestureMachine::new(
+            cfg.timing(),
+            proxy.x_res(),
+            proxy.y_res(),
+            proxy.slot_count(),
+        );
+        let watch = AsyncFd::with_interest(FdWatch(proxy.as_raw_fd()), Interest::READABLE)?;
+
+        info!("linux-3-finger-drag started successfully!");
+
+        // Inner loop: fully event-driven. We wake for exactly three
+        // reasons: the touchpad has events, a gesture decision deadline
+        // arrived, or housekeeping (config reload / shutdown signal).
+        let lost_device = loop {
+            tokio::select! {
+                ready = watch.readable() => {
+                    let mut guard = ready?;
+                    match proxy.drain(&mut machine, vtp) {
+                        Ok(()) => { guard.clear_ready(); }
+                        Err(e) if is_unplug(&e) => break true,
+                        Err(e) => return Err(e),
+                    }
+                }
+
+                _ = sleep_until_opt(machine.next_deadline()) => {
+                    let outs = machine.on_tick(std::time::Instant::now());
+                    proxy.apply(&outs, vtp)?;
+                }
+
+                _ = cfg_timer.tick() => {
+                    let new_mtime = std::fs::metadata(&cfg_path)
+                        .and_then(|m| m.modified())
+                        .ok();
+                    if new_mtime.is_some() && new_mtime != cfg_mtime {
+                        cfg_mtime = new_mtime;
+                        cfg = config::init_cfg();
+                        machine.set_timing(cfg.timing());
+                        info!("Configuration reloaded (log settings need a restart).");
+                    }
+                }
+
+                _ = sigterm.recv() => break false,
+                _ = sigint.recv() => break false,
+            }
+        };
+
+        if !lost_device {
+            proxy.destruct()?;
+            return Ok(());
+        }
+
+        // The touchpad vanished (re-enumeration / suspend quirk). Drop
+        // the dead handles, release the button if a drag was mid-flight,
+        // and try to find it again -- the systemd unit's Restart is the
+        // backstop if it never comes back.
+        warn!("Touchpad disappeared (ENODEV); attempting rediscovery...");
+        if machine.button_held() {
+            vtp.mouse_up()?;
+        }
+        let _ = proxy.destruct();
+
+        if args.device.is_some() {
+            // an explicitly given device won't be re-discovered; bail
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "explicitly specified device disappeared",
+            ));
+        }
+
+        for attempt in 1..=REDISCOVER_ATTEMPTS {
+            tokio::time::sleep(REDISCOVER_BACKOFF).await;
+            match discovery::find_real_trackpads() {
+                Ok(paths) if !paths.is_empty() => {
+                    debug!("Touchpad back after {attempt} attempt(s).");
+                    continue 'device;
+                }
+                _ => {}
             }
         }
-    };
-
-    debug!("Joining delay timer thread");
-    translator.send_signal(ControlSignal::TerminateThread).await?;
-
-    // awaiting a JoinHandle produces a Result
-    // the generic for this JoinHandle, though, is itself a Result, 
-    // so we can just return what the JoinHandle yields
-    mouse_up_listener.await? 
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "touchpad did not reappear after re-enumeration",
+        ));
+    }
 }

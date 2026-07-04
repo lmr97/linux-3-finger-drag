@@ -1,271 +1,175 @@
-# Three Finger Drag for Wayland/KDE
-This program provides three-finger-drag support computers with touchpads running in Wayland sessions (notably KDE Plasma 6). It only depends on `libinbut` and `uinput`, so the program should run in any desktop environment that has `libinput` installed, regardless of whether it uses X11 or Wayland.
+# Three-Finger Drag for Wayland/KDE (and X11)
 
-## Tested on...
+Rest three fingers on the touchpad and move them: the window / text / icon
+under the cursor is dragged, exactly like macOS's "three finger drag".
+Lift, and the drag ends.
 
-OS | Version | Desktop Enviroment | Verified
----|---|---|---
-**Kubuntu** | 24.10 | KDE Plasma 6 | ✅ <sup>1</sup>
-**Arch** | (kernel 6.15.4) | KDE | ✅
+Since v2.0 the program is a full **evdev multitouch proxy** (replacing
+the earlier libinput-gesture-listener design). The proxy exists because
+of KWin: KDE hardcodes desktop-switching to *both* 3- and 4-finger
+horizontal swipes, with no setting to disable just the 3-finger binding
+(#18) — so a gesture listener that merely *watches* the touchpad can
+never stop KWin from also acting on the same three fingers. Owning the
+device and deciding per-frame what the compositor gets to see is the
+only clean fix.
 
----
-<sup>1</sup> Developed on this setup.
-
-## Contents
-
-- [What is three-finger dragging?](#what-is-three-finger-dragging)
-- [Automated installation](#automated-installation)
-- [Manual Installation](#manual-installation)
-  - [Step 1 — Install `libinput` dev library](#1-install-the-libinput-dev-library)
-  - [Step 2 — Clone the repo](#2-clone-the-repository)
-  - [Step 3 — Update permissions](#3-update-permissions)
-    - [Step 3.1 — For `uinput`](#31-for-uinput)
-    - [Step 3.2 — For `libinput`](#32-for-libinput)
-  - [Step 4 — Build with Cargo](#4-build-with-cargo)
-  - [Step 5 — Install to `/usr/bin`](#5-install-into-usrbin)
-  - [Step 6 — Reboot](#6-reboot)
-  - [Step 7 — Add to KDE Autostart](#7-add-program-to-autostart-kde-only)
-  - [Step 7b — Set up as `systemd` user unit](#7b-add-program-to-systemd-works-distro-and-desktop-agnostic)
-- [Configuration](#configuration)
-  - [Set up](#Set-up-configuration)
-  - [acceleration](#acceleration-float)
-  - [dragEndDelay](#dragenddelay-int)
-  - [logFile](#logfile-string)
-  - [logLevel](#loglevel-string)
-  - [responseTime](#responsetime-int)
-- [How it works](#how-it-works)
-- [Troubleshooting and tips](#troubleshooting-and-tips)
-  - [``error: linking with `cc` failed: exit status: 1``](#error-linking-with-cc-failed-exit-status-1-during-compilation)
-  - [Changing 3-finger gestures to 4-finger gestures](#changing-3-finger-gestures-to-4-finger-gestures)
-    - [For libinput gestures](#for-libinput-gestures-if-needed)
-    - [For other extensions](#for-other-extensionsprograms-like-wzmach)
-
-
-## What is three-finger dragging?
-
-Three-finger dragging is a feature originally for trackpads on Mac devices: instead of holding down the left click on the pad to drag, you can simply rest three fingers on the trackpad to start a mouse hold, and move the fingers together to continue the drag in whatever direction you move them in. In short, it interprets three fingers on the trackpad as a mouse-down input, and motion with three fingers afterwards for mouse movement. It can be quite handy, as it will save your hand some effort for moving windows around and highlighting text. 
-
-Here is [an example](https://www.youtube.com/watch?v=-Fy6imaiHWE) of three-finger dragging in action on a MacBook.
-
-## Automated installation
-
-The included `install.sh` installs the program as a systemd user unit (other inits are not yet supported). It also updates the `libinput-gestures` config files (if you have that installed) so that all 3-finger gestures become 4-finger gestures. 
-
-It requires the following to run properly: 
-* **Root permissions**
-* A working Rust installation (see [Rust's install guide](https://www.rust-lang.org/tools/install))
-* `libinput`'s development library (see Step 1 below for install details)
-
-It will also ask to reboot your system afterward, which is required to update permissions for `libinput` and `uinput`.
-
-You can execute the install script with the following:
+## How it works
 
 ```
-sudo bash install.sh
+ real touchpad ──(exclusive grab)──> linux-3-finger-drag
+                                        │        │
+                                        │        ├──> synthetic touchpad clone
+                                        │        │    (byte-identical mirror of
+                                        │        │     everything that is NOT a
+                                        │        │     3-finger drag)
+                                     gesture     │
+                                     machine     └──> virtual mouse
+                                                      (BTN_LEFT + motion while
+                                                       a 3-finger drag is live)
 ```
 
-## Manual installation
+* The real touchpad is **exclusively grabbed** for the program's whole
+  lifetime. The compositor instead reads a **synthetic clone** that
+  impersonates the real device's identity (name/vendor/product), so
+  saved per-device settings (natural scrolling, tap-to-click, pointer
+  accel…) keep applying. The clone carries a `phys` marker
+  (`linux-3-finger-drag/proxy`) so the proxy can always tell its own
+  clone apart from real hardware.
+* A fresh touch is **withheld** from the compositor until classified:
+  a lone finger goes live after `probeDelay` (default 15 ms — ordinary
+  pointer motion never feels delayed), an ambiguous 2-3 finger touch
+  waits out `entryDebounce` (default 50 ms), 4+ fingers goes live
+  instantly. Real fingers land and lift asynchronously; judging a touch
+  frame-by-frame (the naive approach) leaks phantom taps and misreads
+  gestures.
+* A touch that holds at **exactly 3 fingers** through the debounce
+  becomes a drag: the compositor never learns those fingers existed
+  (KWin can't desktop-switch on what it can't see), and finger motion
+  drives the virtual mouse with the left button held. The drag ends
+  when the last finger lifts — staggered liftoffs can't leak trailing
+  1-2 finger touches (which libinput would read as a right-click tap).
+* Anything else — taps (3-finger tap still middle-clicks!), scrolls,
+  4-finger gestures, quick flicks — is replayed to the clone verbatim.
 
-### 1. Install the `libinput` dev library
+The classification logic lives in a pure, I/O-free state machine
+(`src/runtime/gesture.rs`) driven by an injected clock, with a
+regression test suite encoding every failure mode this project has hit
+live (`src/runtime/gesture/tests.rs`). The event loop is fully
+event-driven (epoll on the device fd + exact decision deadlines): idle
+CPU is zero, and no polling interval sits between your fingers and a
+decision.
 
-If you are using GNOME, KDE Plasma, or an Xorg-based desktop environment, you likely already have `libinput`'s dev package installed (it's a dependency of those environments). To make sure, try installing it; your package manager will tell you if it is. Here are the commands for some common distros:
+## Requirements
 
-#### Debian-based
-```
-sudo apt install libinput-dev
-```
+* Rust toolchain (build-time only — there are **no** C library
+  dependencies; the program speaks evdev/uinput directly)
+* `uinput` kernel module
+* read access to `/dev/input` (user in the `input` group) and write
+  access to `/dev/uinput` (udev rule included)
+* a systemd user session for the provided unit (any init works if you
+  start the binary yourself)
 
-#### Red Hat / Fedora
-```
-sudo dnf install libinput-devel
-```
+Wayland and X11 are both fine; the proxy operates below the display
+server. Developed and tuned on a MacBookPro11,3 (bcm5974 touchpad)
+running CachyOS + KDE Plasma Wayland.
 
-#### Arch
-```
-sudo pacman -S libinput   # included in main package
-```
+## Installation
 
-#### openSUSE
-```
-sudo zypper install libinput-devel
-```
+Automated (installs udev rule, adds you to `input`, builds, installs
+binary + config + systemd user unit):
 
-
-### 2. Clone the repository
-```
-git clone https://github.com/lmr97/linux-3-finger-drag.git
-cd linux-3-finger-drag
-```
-
-### 3. Update permissions
-
-This programs reads cursor events from your trackpad (using `/dev/input/event0`), and writes to `/dev/uinput`, so it requires an adjustment of permissions to accomplish both. 
-
-#### 3.1 For `uinput`
-For more info about what's being done here, see [this section](https://wiki.archlinux.org/title/Udev#Allowing_regular_users_to_use_devices) of the ArchWiki article on `udev`. 
-You may need to create the folder `rules.d` in `/etc/udev`.
-
-<u>**For Arch users**</u>: You will need to set the `uinput` kernel module to load on boot, if you haven't already, line so:
-```
-echo "uinput" | sudo tee /etc/modules-load.d/uinput.conf 2&>/dev/null
-```
-
-Now you can the udev rules to your system:
-```
-sudo cp ./60-uinput.rules /etc/udev/rules.d
-```
-
-#### 3.2 For `libinput`
-
-Simply add yourself to the the user group "input":
-```
-sudo gpasswd --add <your username> input
+```bash
+sudo ./install.sh
 ```
 
-### 4. Build with Cargo
-```
+Manual:
+
+```bash
+# 1. permissions
+sudo cp 60-uinput.rules /etc/udev/rules.d/
+sudo gpasswd --add $USER input
+echo uinput | sudo tee /etc/modules-load.d/uinput.conf
+sudo modprobe uinput
+# log out & in (or reboot) so the group change applies
+
+# 2. build & install
 cargo build --release
-```
+sudo cp target/release/linux-3-finger-drag /usr/bin/
 
-**For my Rustacean users**: A simple `cargo install --path .` will work in place of this step and the next one. Just be sure to substitute `~/.cargo/bin/` for `/usr/bin/` where it appears below and in the provided systemd user unit file (`three-finger-drag.service`), of course.
-
-### 5. Install into `/usr/bin`
-Once you've got it working, copy it into `/usr/bin` for ease and consistency of access:
-
-```
-sudo cp --preserve=ownership ./target/release/linux-3-finger-drag /usr/bin
-```
-
-*Note*: the `--preserve=ownership` option is included so the executable is not run as root, but as you, the user. This keeps the program from being too privileged on your system.
-
-### 6. Reboot
-
-A reboot is required to update all the permissions needed for the program to run. You can also do a soft reboot, which will serve the same purpose, with `systemctl soft-reboot` (for systemd users, of course). 
-
-### 7. Add program to Autostart (KDE only)
-This is a part of the graphical interface. You can find the Autostart menu in System Settings > Autostart (near the bottom). Once there, click the "+ Add..." button in the upper right of the window, and select "Add Application" from the dropdown menu. Then, in text bar in the window that pops up, paste
-```
-/usr/bin/linux-3-finger-drag
-```
-and click OK. 
-
-Now select the program in the Autostart menu, and press Start in the upper right-hand corner of the window to start using it in the current session. It will automatically start in the next session you log into.
-
-### 7b. Add program to systemd (works distro and desktop agnostic)
-
-Alternatively, you can a [systemd user unit](https://wiki.archlinux.org/title/Systemd/User) in any Linux desktop to start the program on login. To do this, create the local systemd folder if not already created:
-
-```
+# 3. config + service
+mkdir -p ~/.config/linux-3-finger-drag
+cp 3fd-config.json ~/.config/linux-3-finger-drag/
 mkdir -p ~/.config/systemd/user
-```
-
-After that, copy the service file in this repo (`three-finger-drag.service`) into the folder:
-
-```
 cp three-finger-drag.service ~/.config/systemd/user/
-```
-
-Now you just need to enable and start the service:
-
-```
 systemctl --user enable --now three-finger-drag.service
 ```
 
-### You did it! Now you can 3-finger-drag!
+Test in the foreground first if you're changing code:
+`./target/release/linux-3-finger-drag` (Ctrl-C to quit — the touchpad
+returns to normal the moment the process exits).
 
+### CLI
+
+```
+linux-3-finger-drag [--device /dev/input/eventN]
+```
+
+`--device` skips touchpad auto-discovery and proxies the given device.
+Used by the integration test harness; also handy on machines with more
+than one touchpad (auto-discovery proxies the first one found).
 
 ## Configuration
-This program looks for a JSON config files with the following precedence:
 
-1. `$XDG_CONFIG_HOME/linux-3-finger-drag/3fd-config.json`
+`~/.config/linux-3-finger-drag/3fd-config.json`, hot-reloaded on change
+(log settings excepted — those need a restart). All fields optional:
 
-2. `~/.config/linux-3-finger-drag/3fd-config.json` (if `$XDG_CONFIG_HOME` isn't set) 
+| field | default | meaning |
+|---|---|---|
+| `acceleration` | `1.0` | drag speed multiplier (`> 1` faster, `< 1` slower) |
+| `dragEndDelay` | `0` | drag-lock, in ms: after lifting, the button stays held this long, and a new 3-finger touch inside the window **continues the same drag**. Any other touch releases the button *before* it is relayed, so post-drag pointer motion can never smear the held button around. `0` disables. |
+| `entryDebounce` | `50` | ms an ambiguous (2-3 finger, possibly still growing) fresh touch is withheld before committing: drag, or replay to the compositor |
+| `probeDelay` | `15` | ms a so-far-lone finger is withheld (just long enough to catch a 2nd/3rd finger landing a beat behind the 1st) |
+| `pressGrace` | `75` | ms a committed drag defers its button press while the fingers haven't moved. Lets a 4th finger that lands *after* the entry window (fast, sloppy 4-finger swipes stagger hard) abort the misclassified drag with no phantom click — the touch is handed to the compositor mid-gesture instead |
+| `logFile` | `"stdout"` | log destination (`"stdout"` or a file path) |
+| `logLevel` | `"info"` | `off` / `error` / `warn` / `info` / `debug` / `trace` |
 
-There is an example configuration file included in this repo, `3fd-config.json`, with all fields included and set to default values. 
+The old `responseTime` knob is gone: the loop is event-driven, so there
+is no poll interval to tune. A leftover `responseTime` in an existing
+config file is ignored harmlessly.
 
-Below are the fields that can be configured, with the values given here being the defaults. All fields are optional. 
+## Testing
+
+```bash
+cargo test                                    # gesture regression suite (pure, instant)
+cargo test --test integration -- --ignored    # software-in-the-loop, see below
 ```
-{
-    acceleration: 1.0,
-    dragEndDelay: 0,
-    logFile: "stdout",
-    logLevel: "info",
-    responseTime: 5
-}
-```
 
-If the JSON is malformed in the found configuration file, or the file is simply not found, the defaults listed above are loaded instead, and the program continues execution. 
+The integration test creates a **fake touchpad** via uinput, points the
+real binary at it (`--device`), injects scripted multi-finger sequences,
+and asserts on what actually comes out of the clone and the virtual
+mouse. It exercises the entire evdev plumbing without touching your real
+touchpad — but its output devices are real input devices, so the
+compositor will act on them (the test parks the cursor at the right
+screen edge and produces one brief left-click there). Run it from a
+session where that's acceptable.
 
-The configuration values will be hot-reloaded when `3fd-config.json` is updated, except for logging configurations. A change to logging configuration values requires a restart of the program (currently; open to PRs on this). 
+## Troubleshooting
 
-### `acceleration` (float)
-This is a speedup multiplier which will be applied to all 3-finger gesture movements. Defaults to `1.0`.
+* **Touchpad dead while the program runs?** The proxy has the device
+  grabbed but something is failing after that. Check
+  `journalctl --user -u three-finger-drag.service -e` — and note the
+  touchpad always returns the instant the process exits.
+* **"You are not yet allowed to write to /dev/uinput"** — udev rule not
+  applied, or you haven't logged out and back in since being added to
+  the `input` group.
+* **Drag feels too slow/fast** — tune `acceleration`; it multiplies a
+  baseline of 12 px per mm of finger travel.
+* **KDE gestures still firing on 3 fingers?** Then the compositor is
+  reading the *real* touchpad, not the clone — the service probably
+  isn't running.
+* **Two touchpads?** Auto-discovery takes the first; pin one explicitly
+  with `--device`.
 
+## License
 
-### `dragEndDelay` (int)
-This is the time (in milliseconds) that the mouse hold will persist for after you lift your fingers (to give you a moment to reposition your fingers). This timeout will be cancelled if a non-three-fingered gesture is received, and the drag will end. Defaults to 0.
-
-### `logFile` (string)
-This allows the user to specify a log file separate from the console/`stdout`. It works best with absolute paths, because `~` or other shell variables are not expanded, but relative filepaths work as well. Note that the program will not create the file if it doesn not exist; in this case, it will simply raise a warning and log to the console. If no file is specified, or the file path is invalid, the program will log to the console. Defaults to `"stdout"`.
-
-### `logLevel` (string)
-This allows for the user to control logging verbosity. This can be one of the following values (from least to most verbose):
-    
-  1. `off`
-
-  2. `error`
-  
-  3. `warn`
-  
-  4. `info`
-  
-  5. `debug`
-  
-  6. `trace`
-
-For more info on what these levels are intended to capture, see the documentation for [the `enum` to which these values correspond](https://docs.rs/log/0.4.6/log/enum.Level.html). Note that `debug` and `trace` levels generate logs extremely rapidly, which both baloons the log file size (even after short periods of use), and consumes spikes CPU usage on fast, long gestures. Defaults to `"info"`.
-
-### `responseTime` (int)
-This is the time (in milliseconds) that the main loop waits before fetching the next batch of events, the inverse of a refresh rate. Defaults to 5.
-
-## How it works
-This program uses Rust bindings for libinput to detect three-finger gestures, and translates them into the right events to be written to [`/dev/uinput`](https://www.kernel.org/doc/html/v4.12/input/uinput.html) via a virtual trackpad. This gives the effect of three-finger dragging. This flow of control bypasses the display server layer entirely, which ensures compatability with any desktop environment.
-
-## Troubleshooting and tips
-
-If the fixes here and in the Issues section of the repo don't address your issue, please open a new issue!
-
-### ``error: linking with `cc` failed: exit status: 1`` during compilation
-
-This error arises when some underlying system library can't be found. Cargo produces several "notes" in addition to the error message; look for the final one, or whichever includes a "not found" message. 
-
-If that note includes some mention of `-linput`, then you need to install the development library for `libinput`. (see [Step 1](#1-install-the-libinput-dev-library))
-
-If that text isn't in the note, you may be missing the basic C/C++ developer tools, which are needed to build this program. Rust programs (as I'm using Rust here, anyway) need `gcc` installed on the system to compile. `gcc` is also typically bundled with your distro's "base development" or "build essentials" package, so you can get it that way, too.
-
-### Changing 3-finger gestures to 4-finger gestures
-
-#### For GNOME users
-
-GNOME users will need to install the Window Gestures Shell Extension. Once installed, you'll be able to change the finger number for swipe gestures from your settings. You can get it from either the [GNOME Extensions website](https://extensions.gnome.org/extension/6343/window-gestures/) or the [GitHub repository](https://github.com/amarullz/windowgestures). Once installed, disable all three finger gestures. 
-
-#### For `libinput-gestures` (if needed)
-
-If you haven't installed `libinput-gestures`, you can skip to the next step. 
-
-If you have, though, modify the config file `/etc/libinput-gestures.conf` or `~/.config/libinput-gestures.conf`. 
-Add 4 in the finger_count column to convert 3 finger swipes to 4 finger swipes, to prevent confusion for the desktop environment and frustration for yourself.
-
-change
-``` 
-gesture swipe up     xdotool key super+Page_Down 
-```
-to
-```
-gesture swipe up  4  xdotool key super+Page_Down
-```
-(The only difference is the 4 before "xdotool").
-
-#### For other extensions/programs (like [wzmach](https://github.com/maurges/wzmach))
-
-The process is essentially the same: there is typically a configuration file somewhere that includes the number of fingers for swipe gestures, and if there are any responding to 3-finger swipes, increase the finger count to 4. Consult your program's documentation for the specifics.
+MIT (see `LICENSE`).
