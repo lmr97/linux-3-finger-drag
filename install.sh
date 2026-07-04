@@ -26,25 +26,10 @@ ensure-libinput() {
     searchCommand["fedora"]="dnf list --installed libinput-devel"
     searchCommand["arch"]="pacman -Qs libinput"
     searchCommand["suse"]="zypper search --installed-only libinput-devel"
-    declare -A searchCommand;
-    searchCommand["debian"]="apt list -qq --installed libinput-dev"
-    searchCommand["ubuntu"]="apt list -qq --installed libinput-dev"         # just in case
-    searchCommand["ubuntu debian"]="apt list -qq --installed libinput-dev"  # for PopOS
-    searchCommand["redhat"]="dnf list --installed libinput-devel"
-    searchCommand["fedora"]="dnf list --installed libinput-devel"
-    searchCommand["arch"]="pacman -Qs libinput"
-    searchCommand["suse"]="zypper search --installed-only libinput-devel"
 
     # set all variables from the os-release file
     source /etc/os-release
-    # set all variables from the os-release file
-    source /etc/os-release
 
-    if   [[ -n $ID_LIKE ]]; then
-        SEARCH_CMD=${searchCommand[${ID_LIKE}]}
-    elif [[ -n $ID ]]; then
-        SEARCH_CMD=${searchCommand[${ID}]}
-    fi
     if   [[ -n $ID_LIKE ]]; then
         SEARCH_CMD=${searchCommand[${ID_LIKE}]}
     elif [[ -n $ID ]]; then
@@ -64,19 +49,7 @@ ensure-libinput() {
         echo -en "\r\e[0;33mlibinput dev library not found, installing...   \e[0m"
         
         INSTALL_CMD="uncommon"  # default
-    elif [[ -z $($SEARCH_CMD 2> /dev/null) ]]; then
-        echo -en "\r\e[0;33mlibinput dev library not found, installing...   \e[0m"
-        
-        INSTALL_CMD="uncommon"  # default
 
-        declare -A installCommand;
-        installCommand["debian"]="apt-get -q install -y libinput-dev"
-        installCommand["ubuntu"]="apt-get -q install -y libinput-dev"          # just in case
-        installCommand["ubuntu debian"]="apt-get -q install -y libinput-dev"   # for PopOS
-        installCommand["redhat"]="dnf -y install libinput-devel"
-        installCommand["fedora"]="dnf -y install libinput-devel"
-        installCommand["arch"]="pacman -S --noconfirm libinput"
-        installCommand["suse"]="zypper install -y libinput-devel"
         declare -A installCommand;
         installCommand["debian"]="apt-get -q install -y libinput-dev"
         installCommand["ubuntu"]="apt-get -q install -y libinput-dev"          # just in case
@@ -156,7 +129,6 @@ echo -n "Updating permissions...                         "
 ## Update udev rules
 mkdir -p /etc/udev/rules.d   # make if not already extant
 cp ./60-uinput.rules /etc/udev/rules.d/
-cp ./60-uinput.rules /etc/udev/rules.d/
 
 ## Add user to "input" group to read libinput debug events
 gpasswd --add $SUDO_USER input > /dev/null
@@ -184,10 +156,6 @@ CARGO_EXIT_CODE=$?
 if [ $CARGO_EXIT_CODE -ne 0 ]; then
     echo-mls "\n\e[0;33mHint:\e[0m You probably need to install the libinput development library, \
         which package is typically named something like 'libinput-dev' for your distribution. \
-        Some distributions bundle it with their libinput package, too. Once you've installed \
-        the package, you can re-run this script with the $LIBINPUT_INSTALLED_FLAG flag (it \
-        won't hurt anything)." 
-    exit $CARGO_EXIT_CODE
         Some distributions bundle it with their libinput package, too. Once you've installed \
         the package, you can re-run this script with the $LIBINPUT_INSTALLED_FLAG flag (it \
         won't hurt anything)." 
@@ -249,13 +217,11 @@ if [[ -n $(ps -p 1 | grep systemd) ]]; then
 
 else
     echo -e "[\e[0;33m WARN \e[0m]"
-    echo -e "[\e[0;33m WARN \e[0m]"
     echo -e "\n\e[0;33mWarning: Your system doesn't use SystemD.\e[0m"
     echo-mls "Currently, only SystemD installation is automated by this install script, \
         so you'll have to use create and enable the service for your init system."
     echo
     echo "You may also have to ensure that the uinput kernel module loads on boot."
-    echo "The config has been added in /etc/modules-load.d/uinput.conf."
     echo "The config has been added in /etc/modules-load.d/uinput.conf."
     echo
     echo-mls "(If I get enough requests for it I'll adapt this install script for other inits, \
