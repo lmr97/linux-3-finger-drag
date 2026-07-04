@@ -1,10 +1,19 @@
 # Changelog
 
+## 1.7.0 - 2026-07-03
+
+### Fixed
+
+- Fix subpixel motion, for smoother drags (thanks to [R3-da](https://github.com/R3-da), with [PR #21](https://github.com/lmr97/linux-3-finger-drag/pull/21))
+
+- Fix outdated depependencies
+
+
 ## 1.6.0 - 2025-11-24
 
 ### Fixed
 
-- Fix lack of granularity in movement
+- Fix lack of granularity in movement (thanks to [R3-da](https://github.com/R3-da), with [PR #21](https://github.com/lmr97/linux-3-finger-drag/pull/21))
 
 ### Added
 

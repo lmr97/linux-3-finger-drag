@@ -157,9 +157,9 @@ async fn run_main_event_loop(
 
             // Without being a `ControlSignal::TerminateThread` being sent
             // into the channel, the other thread only finishes when
-            // is an error is raised. it has been designed not to panic. 
-            // the value the thread returns is a `Result`, so the this extracts 
-            // the Result from the fork and returns it.
+            // an error is raised. It has been designed not to panic. 
+            // the value the thread returns is a `Result`, so the this  
+            // conditional propagates the Result from the fork.
             if mouse_up_listener.is_finished() {
                 let fork_err = mouse_up_listener.await?.unwrap_err();
                 error!("Error raised in fork: {:?}", fork_err);

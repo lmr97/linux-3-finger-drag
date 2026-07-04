@@ -153,7 +153,7 @@ impl Clone for VirtualTrackpad {
                 "uinput file descriptor could not be duplicated, \
                 likely do to hitting the maximum open file descriptors \
                 for this OS."
-        );
+            );
 
         VirtualTrackpad {
             handle: UInputHandle::new(File::from(uinput_fd)),
