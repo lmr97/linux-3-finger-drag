@@ -99,12 +99,6 @@ impl GestureTranslator {
         // the drag hold being randomly released
         self.send_signal(ControlSignal::CancelMouseUp).await?;
 
-        // Ignore tiny motions. This helps improve stability of gesture.
-        if dx.abs() < self.cfg.min_motion 
-        && dy.abs() < self.cfg.min_motion {
-            return Ok(());
-        }
-
         self.vtp.mouse_move_relative(
             dx * self.cfg.acceleration, 
             dy * self.cfg.acceleration
@@ -153,8 +147,8 @@ impl GestureTranslator {
         match swipe_ev {
             GestureSwipeEvent::Update(swipe_update) => {            
                 self.update_cursor_position(
-                    swipe_update.dx_unaccelerated(), 
-                    swipe_update.dy_unaccelerated()
+                    swipe_update.dx(), 
+                    swipe_update.dy()
                 ).await
             }
             GestureSwipeEvent::Begin(_) => self.mouse_down().await,

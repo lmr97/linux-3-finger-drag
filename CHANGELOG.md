@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.6.0 - 2025-11-24
+
+### Fixed
+
+- Fix lack of granularity in movement
+
+### Added
+
+- Add hot reloading for config file, except for logging options (open to PRs for this)
+
+### Removed
+
+- Remove `minMotion` option, as it is useless
+
+
 ## 1.5.0 - 2025-08-23
 
 ### Added

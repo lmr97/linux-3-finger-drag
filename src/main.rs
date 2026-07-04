@@ -1,4 +1,8 @@
-use std::{sync::{atomic::{AtomicBool, Ordering}, Arc}};
+use std::{
+    sync::{
+        Arc, atomic::{AtomicBool, Ordering}
+    }, time::SystemTime
+};
 use tokio::sync::mpsc::{self, Receiver};
 use signal_hook::{self, consts::{SIGINT, SIGTERM}, flag};
 use tracing::{debug, error, info, trace};
@@ -15,6 +19,9 @@ use linux_3_finger_drag::{
 
 #[tokio::main]
 async fn main() -> Result<(), GtError> {
+
+    let cfg_file = config::get_config_file_path()?; 
+    let cfg_last_modified = std::fs::metadata(cfg_file)?.modified()?;
 
     let configs = config::init_cfg();
 
@@ -40,6 +47,7 @@ async fn main() -> Result<(), GtError> {
 
     info!("Searching for the trackpad on your device...");
 
+    info!("end evdev search");
     // using a match case here instead of a `?` here so the program can destruct 
     // the virtual trackpad before it exits
     let main_result = match libinput_init::find_real_trackpads() {
@@ -51,7 +59,13 @@ async fn main() -> Result<(), GtError> {
                 configs.clone(),
                 sender
             );
-            run_main_event_loop(translator, recvr, &should_exit, real_trackpad).await
+            run_main_event_loop(
+                translator, 
+                recvr, 
+                &should_exit, 
+                real_trackpad, 
+                cfg_last_modified
+            ).await
         },
         Err(e) => Err(GtError::from(e))
     };
@@ -75,6 +89,7 @@ async fn run_main_event_loop(
     recvr: Receiver<ControlSignal>,
     should_exit: &Arc<AtomicBool>,
     mut real_trackpad: input::Libinput, 
+    mut cfg_last_modified: SystemTime
     
 ) -> Result<(), GtError> {
 
@@ -90,7 +105,7 @@ async fn run_main_event_loop(
     };
 
     let mouse_up_listener = tokio::spawn(fork_fn);
-
+    let cfg_file_path = config::get_config_file_path()?; 
 
     info!("linux-3-finger-drag started successfully!");
 
@@ -98,6 +113,29 @@ async fn run_main_event_loop(
         // this is to keep the infinite loop from filling out into
         // entire CPU core, which it will do even on no-ops.
         std::thread::sleep(translator.cfg.response_time);
+
+        // check if the configuration was modified, and if so, update configs in memory
+        let cfg_last_modified_update = std::fs::metadata(&cfg_file_path)?.modified()?;
+
+        if cfg_last_modified_update > cfg_last_modified {
+
+            let new_cfg = config::init_cfg();
+            translator.cfg = new_cfg.clone();
+
+            cfg_last_modified = cfg_last_modified_update;
+        }
+        
+        // check if the configuration was modified, and if so, update configs in memory
+        let cfg_last_modified_update = std::fs::metadata(&cfg_file_path)?.modified()?;
+
+        if cfg_last_modified_update > cfg_last_modified {
+
+            let new_cfg = config::init_cfg();
+            translator.cfg = new_cfg.clone();
+
+            cfg_last_modified = cfg_last_modified_update;
+        }
+
 
         // handle interrupts
         if should_exit.load(Ordering::Relaxed) {

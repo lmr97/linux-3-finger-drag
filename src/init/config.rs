@@ -55,9 +55,6 @@ pub struct Configuration {
     #[serde(default = "default_info")]
     pub log_level: LogLevel,
 
-    #[serde(default = "default_pt_two")]
-    pub min_motion: f64,
-
     #[serde(default = "default_5ms")]
     #[serde_as(as = "serde_with::DurationMilliSeconds<u64>")]
     pub response_time: Duration,        // in milliseconds
@@ -70,7 +67,6 @@ impl Default for Configuration {
             drag_end_delay: Duration::from_millis(0),
             log_file: "stdout".to_string(),
             log_level: LogLevel::INFO,
-            min_motion: 0.2,
             response_time: Duration::from_millis(5)
         }
     }
@@ -83,27 +79,11 @@ impl Default for Configuration {
 fn default_1()      -> f64      { 1.0 }
 fn default_0ms()    -> Duration { Duration::from_millis(0) }
 fn default_5ms()    -> Duration { Duration::from_millis(5) }
-fn default_pt_two() -> f64      { 0.2 }
 fn default_stdout() -> String   { "stdout".to_string() }
 fn default_info()   -> LogLevel { LogLevel::INFO }
 
 
-// Configs are so optional that their absence should not crash the program,
-// So if there is any issue with the JSON config file,
-// the following default values will be returned:
-//
-// {
-//     acceleration: 1.0,
-//     dragEndDelay: 0,
-//     logFile: "stdout",
-//     logLevel: "info",
-//     minMotion: 0.2,
-//     responseTime: 5
-// }
-//
-// The user is also warned about this, so they can address the issues
-// if they want to configure the way the program runs.
-pub fn parse_config_file() -> Result<Configuration, std::io::Error> {
+pub fn get_config_file_path() -> Result<PathBuf, std::io::Error> {
     let config_folder = match std::env::var_os("XDG_CONFIG_HOME") {
         Some(config_dir) => PathBuf::from(config_dir),
         None => {
@@ -121,6 +101,26 @@ pub fn parse_config_file() -> Result<Configuration, std::io::Error> {
         }
     };
     let filepath = config_folder.join("linux-3-finger-drag/3fd-config.json");
+    Ok(filepath)
+}
+
+
+// Configs are so optional that their absence should not crash the program,
+// So if there is any issue with the JSON config file,
+// the following default values will be returned:
+//
+// {
+//     acceleration: 1.0,
+//     dragEndDelay: 0,
+//     logFile: "stdout",
+//     logLevel: "info",
+//     responseTime: 5
+// }
+//
+// The user is also warned about this, so they can address the issues
+// if they want to configure the way the program runs.
+pub fn parse_config_file() -> Result<Configuration, std::io::Error> {
+    let filepath = get_config_file_path()?;
     let jsonfile = read_to_string(&filepath)
         .map_err(|_| 
             // more descriptive error
