@@ -1,5 +1,56 @@
 # Changelog
 
+## Unreleased
+
+Architecture rewrite: the program is now an evdev multitouch proxy
+(exclusive grab + synthetic clone) with a pure, fully-tested gesture
+state machine and an event-driven runtime. Fixes #18.
+
+### Fixed
+
+- KWin's hardcoded 3-finger desktop-switch no longer fires during
+  3-finger drags: the compositor reads a synthetic clone that never
+  sees the drag's fingers (#18).
+- Phantom click at the tail of 4-finger swipes (staggered liftoff
+  passes through exactly 3 fingers; no longer misread as a drag).
+- Fast 4-finger swipes with a late-landing 4th finger are no longer
+  eaten as drags: the button press is deferred (`pressGrace`), so the
+  drag aborts click-free and hands the touch to the compositor
+  mid-gesture.
+- Stuck tool state (BTN_TOUCH/BTN_TOOL_*) on the clone when a
+  partially-relayed touch became a drag -- desynced libinput finger
+  accounting and, with tap-to-click, produced phantom right-clicks.
+- SYN_DROPPED handling follows the evdev protocol; resyncs release
+  slots that lifted during the drop, re-baseline in-flight drags, and
+  size kernel snapshots to the device's true slot range (no phantom
+  touches from zeroed tail entries).
+- Touchpads reporting no resolution get units/mm estimated from their
+  axis range instead of drags running 10-40x too fast.
+- Log files are created if missing.
+
+### Added
+
+- Pure, clock-injected gesture state machine with a 30-test regression
+  suite, a randomized invariant fuzzer (mutation-tested), and a
+  software-in-the-loop integration harness driving the real binary
+  against a fake uinput touchpad.
+- Correct-by-construction drag-lock (`dragEndDelay` > 0): a new
+  3-finger touch resumes the held drag; any other touch releases the
+  button before its events are relayed.
+- `entryDebounce`, `probeDelay`, `pressGrace` config knobs; config
+  sanitization (out-of-range values clamp with a logged warning);
+  sub-pixel motion carry; `--device` and `--version` flags; in-process
+  hotplug rediscovery; `Restart=on-failure` in the unit; GitHub
+  Actions CI.
+
+### Removed
+
+- The libinput FFI, `users`, `nix`, `signal-hook`, `futures-lite`, and
+  `async-io` dependencies -- no C libraries needed anymore.
+- The `responseTime` config knob (the event-driven loop has no poll
+  interval); leftover entries in existing config files are ignored.
+- `response-map.md` (described the pre-proxy design).
+
 ## 1.7.0 - 2026-07-03
 
 ### Fixed
