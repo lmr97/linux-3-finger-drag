@@ -108,14 +108,29 @@ impl MtProxy {
 
         let synth = Self::clone_device(&real)?;
 
-        let x_res = real
-            .absolute_info(AbsoluteAxis::MultitouchPositionX)
-            .map(|i| i.resolution.max(1) as f64)
-            .unwrap_or(1.0);
-        let y_res = real
-            .absolute_info(AbsoluteAxis::MultitouchPositionY)
-            .map(|i| i.resolution.max(1) as f64)
-            .unwrap_or(1.0);
+        // Units-per-mm, from the device's reported resolution. Some
+        // touchpads (various Synaptics/Elan units) report resolution 0;
+        // treating that as 1 unit/mm would make drags 10-40x too fast,
+        // so fall back to estimating from the axis range against a
+        // typical pad size (~100mm x 70mm). Imperfect, but lands within
+        // a factor of ~2 -- the `acceleration` knob covers the rest.
+        let axis_res = |axis: AbsoluteAxis, assumed_mm: f64| -> f64 {
+            match real.absolute_info(axis) {
+                Ok(info) if info.resolution > 0 => info.resolution as f64,
+                Ok(info) if info.maximum > info.minimum => {
+                    let est = (info.maximum - info.minimum) as f64 / assumed_mm;
+                    warn!(
+                        "Touchpad reports no resolution for {:?}; estimating {:.1} units/mm \
+                        from its axis range (tune drag speed with `acceleration` if needed).",
+                        axis, est
+                    );
+                    est
+                }
+                _ => 1.0,
+            }
+        };
+        let x_res = axis_res(AbsoluteAxis::MultitouchPositionX, 100.0);
+        let y_res = axis_res(AbsoluteAxis::MultitouchPositionY, 70.0);
         // The device's real slot range: snapshot ioctls sized past it
         // return zeroed entries whose tracking_id 0 reads as "finger
         // down" -- the phantom-touch bug. Ask the device, don't assume.
