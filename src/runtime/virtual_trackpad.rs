@@ -1,57 +1,37 @@
-// this file is basically copied and rearranged from arcnmx's GitHub example
-// in the input-linux-rs repo (a translation of an example
-// on the Linux kernel's uinput module, actually). 
-// The Rust example can be found here: 
-// https://github.com/arcnmx/input-linux-rs/blob/main/examples/mouse-movements.rs
+//! The virtual mouse that carries out the drag: a minimal uinput device
+//! with one button and relative motion. All *timing* concerns (debounce
+//! windows, drag-lock) live in the gesture machine -- this device just
+//! writes what it's told, synchronously, in order.
+//!
+//! (Historical note: this used to host a cancellable-timer thread and a
+//! control-signal channel to implement dragEndDelay. That machinery is
+//! gone -- the delay is now a deadline inside the gesture state machine,
+//! where it can be unit-tested and where "release the button *before*
+//! relaying someone else's touch" is enforced by construction.)
 
-use std::{
-    fs::{File, OpenOptions}, 
-    os::{fd::AsFd, unix::fs::OpenOptionsExt}, 
-    thread, time::{self, Duration}
-};
-use futures_lite::future::FutureExt;
-use async_io::Timer;
-use tokio::sync::mpsc::Receiver;
+use std::fs::{File, OpenOptions};
+use std::os::unix::fs::OpenOptionsExt;
+use std::{thread, time};
+
 use input_linux::{
-    EventKind, EventTime, 
-    InputEvent, InputId, 
-    Key, KeyEvent, KeyState, 
-    RelativeAxis, RelativeEvent, 
-    SynchronizeEvent, SynchronizeKind, 
-    UInputHandle
+    EventKind, EventTime, InputEvent, InputId, Key, KeyEvent, KeyState, RelativeAxis,
+    RelativeEvent, SynchronizeEvent, SynchronizeKind, UInputHandle,
 };
+use libc::O_NONBLOCK;
+use tracing::{debug, error};
 
-use nix::libc::O_NONBLOCK;
-use tracing::{debug, error, trace};
-
-use crate::runtime::event_handler::ControlSignal::{self, *};
-
-
-/// This struct is does not preserve `mouse_is_down` state between clones: 
-/// that is copied during cloning, for simplicity. 
 pub struct VirtualTrackpad {
     handle: UInputHandle<File>,
     pub mouse_is_down: bool,
-    // Leftover sub-pixel motion carried between events. libinput reports
-    // fractional swipe deltas; truncating each event to an integer (in
-    // mouse_move_relative) drops the fraction, which makes slow drags stick
-    // until a whole pixel accumulates within a single event. Carrying the
-    // remainder here keeps slow motion smooth and drift-free.
-    x_residual: f64,
-    y_residual: f64
 }
 
-
 pub fn start_handler() -> Result<VirtualTrackpad, std::io::Error> {
-    let uinput_file_res = OpenOptions::new()
+    let uinput_file = OpenOptions::new()
         .read(true)
         .write(true)
         .custom_flags(O_NONBLOCK)
-        .open("/dev/uinput");
-
-    let uinput_file = match uinput_file_res {
-        Ok(file) => file,
-        Err(e) => {
+        .open("/dev/uinput")
+        .inspect_err(|_| {
             error!(
                 "You are not yet allowed to write to /dev/uinput.\n\
                 Some things to try:\n\
@@ -60,297 +40,99 @@ pub fn start_handler() -> Result<VirtualTrackpad, std::io::Error> {
                 - Restart your computer\n\
                 - FOR ARCH: make sure the uinput kernel module is loaded on boot\n",
             );
-            return Err(e);
-        }
-    };
+        })?;
 
     let uhandle = UInputHandle::new(uinput_file);
 
-    // I'm using unwraps here because this function is only called 
-    // during the program's setup phase. I've also never had these 
-    // functions below crash the program; if this `start_handler()`
-    // ever crashes (from my experience), it's always an issue with
-    // trying to read `/dev/uinput`. It's typically smooth sailing
-    // in this function after that succeeds. 
-    uhandle.set_evbit(EventKind::Key).unwrap();
-    uhandle.set_keybit(input_linux::Key::ButtonLeft).unwrap();
+    uhandle.set_evbit(EventKind::Key)?;
+    uhandle.set_keybit(Key::ButtonLeft)?;
 
-    uhandle.set_evbit(EventKind::Relative).unwrap();
-    uhandle.set_relbit(RelativeAxis::X).unwrap();
-    uhandle.set_relbit(RelativeAxis::Y).unwrap();
+    uhandle.set_evbit(EventKind::Relative)?;
+    uhandle.set_relbit(RelativeAxis::X)?;
+    uhandle.set_relbit(RelativeAxis::Y)?;
 
     let input_id = InputId {
         bustype: input_linux::sys::BUS_USB,
         vendor: 0x1234,
-        product: 0x5678,  // iykyk
+        product: 0x5678, // iykyk
         version: 0,
     };
     let device_name = b"Virtual trackpad (created by linux-3-finger-drag)";
-    uhandle.create(&input_id, device_name, 0, &[]).unwrap();
+    uhandle.create(&input_id, device_name, 0, &[])?;
     debug!("Virtual trackpad successfully created.");
 
     // may be needed to let the system catch up
     thread::sleep(time::Duration::from_millis(500));
 
-    Ok(
-        VirtualTrackpad {
-            handle: uhandle,
-            mouse_is_down: false,
-            x_residual: 0.0,
-            y_residual: 0.0
-        }
-    )
-
+    Ok(VirtualTrackpad {
+        handle: uhandle,
+        mouse_is_down: false,
+    })
 }
 
-
-/// Start a timer for `delay`.
-/// 
-/// The messy return type is to match `listen_for_signal`. It is infallible.
-async fn plain_timeout(delay: Duration) -> Option<ControlSignal>{
-    trace!("Starting delay of {:?}", delay);
-    Timer::after(delay).await;
-    trace!("Delay completed fully");
-    None
-}
-
-// dragEndDelay time should be cut short by a pointer or scoll gesture;
-// this function listens on the channel for either a pointer button press,
-// a scoll event, or a non-3-finger gesture, and exits when it gets one
-async fn listen_for_signal(rx: &mut Receiver<ControlSignal>) -> Option<ControlSignal> {
-
-    // function blocks until signal is received
-    // since ControlSignal is the only thing
-    // ever sent in the channel, there's no need to
-    // check that that's what we received
-    debug!("Listening for cancel signal...");
-    trace!("Size of buffer currently: {}", rx.len());
-    let sig = rx.recv().await?;
-    debug!("Signal received: {:?}", sig);
-    Some(sig)
-}
-
-impl Clone for VirtualTrackpad {
-    /// This clone() can theoretically panic since there is an expect() in 
-    /// its definition. This is because `try_cloned_to_owned`, from `std::io`,
-    /// utilizes libc's `fnctl`, which can fail, but will only do so if 
-    /// duplicating the file descriptor would exceed the maximum number of 
-    /// file descriptors to be opened (or if the arguments to it are invalid; 
-    /// the Rust method, however, takes no arguments except for a known-valid FD, 
-    /// so those arguments are controlled by the `std` library).
-    /// 
-    /// This makes it as safe as any other file-system function to call, since 
-    /// it only fails when there is a severe resource limitation issue (which 
-    /// would be a rare and system-wide problem).
-    /// 
-    /// Note that the boolean `mouse_is_down` is *copied*, **not** passed by 
-    /// reference, for simplicity. 
-    fn clone(&self) -> Self {
-        let uinput_fd = self.handle
-            .as_fd()
-            .try_clone_to_owned()
-            .expect(
-                "uinput file descriptor could not be duplicated, \
-                likely do to hitting the maximum open file descriptors \
-                for this OS."
-            );
-
-        VirtualTrackpad {
-            handle: UInputHandle::new(File::from(uinput_fd)),
-            mouse_is_down: self.mouse_is_down,
-            x_residual: self.x_residual,
-            y_residual: self.y_residual
-        }
-    }
-}
-
-
-impl VirtualTrackpad
-{
+impl VirtualTrackpad {
     const ZERO: EventTime = EventTime::new(0, 0);
+
+    fn syn() -> input_linux::sys::input_event {
+        InputEvent::from(SynchronizeEvent::new(
+            VirtualTrackpad::ZERO,
+            SynchronizeKind::Report,
+            0,
+        ))
+        .into_raw()
+    }
 
     pub fn mouse_down(&mut self) -> Result<(), std::io::Error> {
         let events = [
-            InputEvent::from(
-                KeyEvent::new(
-                    VirtualTrackpad::ZERO, 
-                    Key::ButtonLeft, 
-                    KeyState::pressed(true))
-                ).into_raw(),
-            InputEvent::from(
-                SynchronizeEvent::new(
-                    VirtualTrackpad::ZERO, 
-                    SynchronizeKind::Report, 
-                    0)
-                ).into_raw(),
+            InputEvent::from(KeyEvent::new(
+                VirtualTrackpad::ZERO,
+                Key::ButtonLeft,
+                KeyState::pressed(true),
+            ))
+            .into_raw(),
+            Self::syn(),
         ];
         self.handle.write(&events)?;
         self.mouse_is_down = true;
         Ok(())
     }
 
-    pub fn mouse_up(&mut self) -> Result<(), std::io::Error> {   
-
+    pub fn mouse_up(&mut self) -> Result<(), std::io::Error> {
         let events = [
-            InputEvent::from(
-                KeyEvent::new(
-                    VirtualTrackpad::ZERO, 
-                    Key::ButtonLeft, 
-                    KeyState::pressed(false))
-                ).into_raw(),
-            InputEvent::from(
-                SynchronizeEvent::new(
-                    VirtualTrackpad::ZERO, 
-                    SynchronizeKind::Report, 
-                    0)
-                ).into_raw(),
+            InputEvent::from(KeyEvent::new(
+                VirtualTrackpad::ZERO,
+                Key::ButtonLeft,
+                KeyState::pressed(false),
+            ))
+            .into_raw(),
+            Self::syn(),
         ];
         self.handle.write(&events)?;
         self.mouse_is_down = false;
-
-        debug!("mouse_up written from simple mouse_up fn");
-
+        debug!("virtual mouse button released");
         Ok(())
     }
 
-
-    /// This is an infinite loop that listens for and processes signals
-    /// for a delay to the end of the drag, like cancelation. This 
-    /// thread will not panic, and will not stop unless either it's 
-    /// sent a `ControlSignal::TerminateThread`, or an error was 
-    /// raised. So if it ends prematurely, it's because of an error.
-    pub async fn handle_mouse_up_timeout(&mut self, delay: Duration, mut rx: Receiver<ControlSignal>) -> Result<(), std::io::Error> {
-        
-        loop {
-            trace!("awaiting signal in handle_mouse_up_timeout...");
-            let ctl_sig = match rx.recv().await {
-                Some(sig) => sig,
-                None => break
-            };
-            debug!("sig recv'd in outer loop: {:?}", ctl_sig);
-
-            // handle signals received during outer loop
-            match ctl_sig {
-                RestartTimer  => {},        // proceed to timer
-                CancelTimer => {
-                    trace!("Setting mouse up now");
-                    self.mouse_up()?;
-                    continue;
-                },
-                CancelMouseUp => continue,  // don't do anything this iteration
-                TerminateThread => break
-            }
-
-            // handle signals received during timer loop
-            // that can't be handled within that scope
-            match self.run_timer(delay, &mut rx).await {
-                Some(signal) => {
-                    match signal {
-                        CancelMouseUp => continue,
-                        TerminateThread => break,
-                        _ => {}                     // cancel/restart timer have already been handled
-                    }
-                },
-                None => {}
-            }
-
-            self.mouse_up()?;
-            debug!("mouse_up written from async mouse_up fn");
-        }
-
-        Ok(())
-    }
-
-    
-    /// A simple, blocking mouse_up, but with a set, blocking, uncancellable delay. 
-    /// `delay` is measured in milliseconds.
-    pub fn mouse_up_delay_blocking(&mut self, delay: Duration) -> Result<(), std::io::Error> {
-        
-        std::thread::sleep(delay);
-
+    /// Whole-pixel relative motion. Sub-pixel remainders are carried by
+    /// the gesture machine, so nothing is lost to truncation here.
+    pub fn mouse_move_relative(&mut self, dx: i32, dy: i32) -> Result<(), std::io::Error> {
         let events = [
-            InputEvent::from(
-                KeyEvent::new(
-                    VirtualTrackpad::ZERO,
-                    Key::ButtonLeft, 
-                    KeyState::pressed(false))
-                ).into_raw(),
-            InputEvent::from(
-                SynchronizeEvent::new(
-                    VirtualTrackpad::ZERO,
-                    SynchronizeKind::Report, 
-                    0)
-                ).into_raw(),
-        ];
-        self.handle.write(&events)?;
-
-        debug!("mouse_up written from mouse_up_delay_blocking");
-
-        self.mouse_is_down = false;
-        Ok(())
-    }
-
-
-    pub fn mouse_move_relative(&mut self, x_rel: f64, y_rel:f64) -> Result<(), std::io::Error> {
-
-        // RelativeEvent::new() can only take integers, so the fractional part
-        // of each delta can't be emitted this event. Rather than discard it
-        // (which makes slow drags stick, since sub-pixel deltas would truncate
-        // to 0 every event), accumulate it into a residual and carry it to the
-        // next event. trunc() truncates toward 0 just like the old floor()/
-        // ceil() split, so the residual stays in (-1, 1) and the origin never
-        // drifts up or down the trackpad from where the drag started.
-        self.x_residual += x_rel;
-        self.y_residual += y_rel;
-
-        let x_rel_int = self.x_residual.trunc() as i32;
-        let y_rel_int = self.y_residual.trunc() as i32;
-
-        self.x_residual -= x_rel_int as f64;
-        self.y_residual -= y_rel_int as f64;
-
-        let events = [
-            InputEvent::from(
-                RelativeEvent::new(
-                    VirtualTrackpad::ZERO, 
-                    RelativeAxis::X, 
-                    x_rel_int)
-                ).into_raw(),
-            InputEvent::from(
-                RelativeEvent::new(
-                    VirtualTrackpad::ZERO, 
-                    RelativeAxis::Y, 
-                    y_rel_int)
-                ).into_raw(),
-            InputEvent::from(
-                SynchronizeEvent::new(
-                    VirtualTrackpad::ZERO, 
-                    SynchronizeKind::Report, 
-                    0)
-                ).into_raw(),
+            InputEvent::from(RelativeEvent::new(
+                VirtualTrackpad::ZERO,
+                RelativeAxis::X,
+                dx,
+            ))
+            .into_raw(),
+            InputEvent::from(RelativeEvent::new(
+                VirtualTrackpad::ZERO,
+                RelativeAxis::Y,
+                dy,
+            ))
+            .into_raw(),
+            Self::syn(),
         ];
         self.handle.write(&events)?;
         Ok(())
-    }
-
-
-    /// A timer that can be cancelled or reset via a signal in the channel. The return value
-    /// is what signal was received, if any, except for `RestartTimer`, since it can be handled 
-    /// within the function.
-    async fn run_timer(&self, delay: Duration, rx: &mut Receiver<ControlSignal>) -> Option<ControlSignal> {
-        loop {
-            // catches the output of the function that returns first
-            let signal = plain_timeout(delay)
-                .or(listen_for_signal(rx))
-                .await?;
-            
-            match signal {
-                RestartTimer => continue,  
-                // function exits, lets the outer loop handle the other signals
-                // covers `CancelTimer` arm, since the behavior would be identical
-                _ => return Some(signal), 
-            }
-        }
     }
 
     pub fn destruct(self) -> Result<(), std::io::Error> {

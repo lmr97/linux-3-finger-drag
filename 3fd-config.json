@@ -3,5 +3,7 @@
     "dragEndDelay": 0,
     "logFile": "stdout",
     "logLevel": "info",
-    "responseTime": 5
+    "entryDebounce": 50,
+    "probeDelay": 15,
+    "pressGrace": 75
 }
