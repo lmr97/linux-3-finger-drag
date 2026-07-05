@@ -9,7 +9,7 @@ use tracing::{debug, info, warn};
 use tracing_subscriber::fmt::time::ChronoLocal;
 
 use linux_3_finger_drag::{
-    init::{config, libinput_init},
+    init::{config, discovery},
     runtime::{gesture::GestureMachine, mt_proxy::MtProxy, virtual_trackpad},
 };
 
@@ -136,7 +136,7 @@ async fn run(
             Some(p) => p.clone(),
             None => {
                 info!("Searching for the trackpad on your device...");
-                let paths = libinput_init::find_real_trackpads()?;
+                let paths = discovery::find_real_trackpads()?;
                 if paths.len() > 1 {
                     warn!(
                         "Found {} touchpads; only proxying the first one ({}).",
@@ -220,7 +220,7 @@ async fn run(
 
         for attempt in 1..=REDISCOVER_ATTEMPTS {
             tokio::time::sleep(REDISCOVER_BACKOFF).await;
-            match libinput_init::find_real_trackpads() {
+            match discovery::find_real_trackpads() {
                 Ok(paths) if !paths.is_empty() => {
                     debug!("Touchpad back after {attempt} attempt(s).");
                     continue 'device;
