@@ -1,3 +1,17 @@
+> [!IMPORTANT]
+> **If you're on libinput ≥ 1.28, you probably don't need this.** libinput
+> now has native three-finger dragging built in; it's just disabled by
+> default and most compositors don't expose a switch. Enabling it is far
+> simpler and more robust than this proxy — it uses libinput's own
+> (excellent) finger detection, keeps four-finger gestures fully native,
+> and adds no duplicate device. On KDE Plasma Wayland I switch it on with a
+> tiny LD_PRELOAD shim: **[enable-3fg-drag](https://github.com/joaodriessen/enable-3fg-drag)**.
+>
+> This proxy remains the fallback for **libinput < 1.28** or setups where
+> the native feature can't be enabled. It's what I ran daily before the
+> native route worked for me; I've since switched to enable-3fg-drag on my
+> own machine.
+
 # Three-Finger Drag for Wayland/KDE (and X11)
 
 Rest three fingers on the touchpad and move them: the window / text / icon
