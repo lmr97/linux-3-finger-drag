@@ -1,12 +1,12 @@
 use std::io::{Error, ErrorKind};
-use nix::libc::{O_RDONLY, O_RDWR, O_WRONLY};
+use nix::libc::{O_RDWR, O_WRONLY};
 use std::fs::{File, OpenOptions};
 use std::os::unix::{fs::OpenOptionsExt, io::OwnedFd};
 use std::path::Path;
 use input::{
-    Libinput, 
-    LibinputInterface, 
-    event::EventTrait, 
+    Libinput,
+    LibinputInterface,
+    event::EventTrait,
     DeviceCapability::{Gesture, Pointer}
 };
 use tracing::{debug, info, error};
@@ -17,9 +17,11 @@ pub struct Interface;
 
 impl LibinputInterface for Interface {
     fn open_restricted(&mut self, path: &Path, flags: i32) -> Result<OwnedFd, i32> {
+        // O_RDONLY is 0, so it can't be tested with a bitmask; open
+        // readable unconditionally and add write when requested.
         OpenOptions::new()
             .custom_flags(flags)
-            .read((flags & O_RDONLY != 0) | (flags & O_RDWR != 0))
+            .read(true)
             .write((flags & O_WRONLY != 0) | (flags & O_RDWR != 0))
             .open(path)
             .map(|file| file.into())
@@ -31,71 +33,31 @@ impl LibinputInterface for Interface {
 }
 
 
-/// Add devices to `Libinput` struct. 
-fn bind_to_real_trackpads(trackpads: Vec<input::Device>) -> Result<Libinput, Error> {
+/// Produce the correct error and logs to pinpoint the cause of the issue.
+fn raise_correct_error(devices_added: u8) -> std::io::Error {
 
-    let mut real_trackpads = Libinput::new_from_path(Interface);
-
-    for tp_dev in trackpads {
-        
-        match real_trackpads.path_add_device(&format!("/dev/input/{}", tp_dev.sysname())) {
-
-            Some(real_dev) => {
-                info!("A touchpad found and loaded.");
-                debug!("The touchpad device found: \"{}\" (udev path: /dev/input/{}).", 
-                    real_dev.name(), real_dev.sysname()
-                );
-            },
-            None => {
-                error!("Could not load the touchpad device \
-                    at `/dev/input/{}`. It may also be a permissions \
-                    error, but the underlying crate (input.rs) does not raise \
-                    errors when a device cannot be loaded, so it's unclear. \
-                    Please submit a Github issue at https://github.com/lmr97/linux-3-finger-drag/issues \
-                    whether you sort this out or not, so as to help others in the \
-                    same situation, and help me develop a better program. Thank \
-                    you for trying it out",
-                    tp_dev.sysname()
-                );
-                return Err(
-                    Error::new(
-                        ErrorKind::AddrNotAvailable, 
-                        "trackpad found, could not bind"
-                    )
-                )
-            }
-        }
-    }
-
-    Ok(real_trackpads)
-}
-
-
-/// Produce the correct error and logs to pinpoint the cause of the issue. 
-fn raise_correct_error(devices_added: u8) -> Result<Libinput, std::io::Error> {
-
-    // Since the `input` crate does not give any errors from 
-    // udev_assign_seat() even on failure, we've gotta figure 
-    // it out ourselves! This will not return `Ok(Libinput)` in any
-    // control path; the return type is chosen only for compatibility
-    // with its caller, `find_real_trackpad()`.
+    // Since the `input` crate does not give any errors from
+    // udev_assign_seat() even on failure, we've gotta figure
+    // it out ourselves! This always returns an `Err`; the return
+    // type is chosen only for compatibility with its caller,
+    // `find_real_trackpad()`.
     //
-    // 
+    //
     // There are two possible error conditions for this match arm:
-    // 
+    //
     //    1. Insufficient permissions to access /dev/input
     //
-    //    2. The device does not have a "trackpad" or "touchpad" 
+    //    2. The device does not have a "trackpad" or "touchpad"
     //       in the name given by libinput
-    // 
+    //
     // Here is how I am checking for each condition:
-    // 
+    //
     //    1. Permissions -- If one of the following is true:
-    //       a. The program found 0 libinput events at all 
+    //       a. The program found 0 libinput events at all
     //       b. The user is not in the 'input' group
-    // 
-    //    2. Not found -- no conditions from (1.) are satisfied. 
-    //       This is a bug (if there's actually a trackpad), and 
+    //
+    //    2. Not found -- no conditions from (1.) are satisfied.
+    //       This is a bug (if there's actually a trackpad), and
     //       warrants an issue being opened on GitHub.
 
 
@@ -106,11 +68,9 @@ fn raise_correct_error(devices_added: u8) -> Result<Libinput, std::io::Error> {
         None => {
             error!("The user that started this program (somehow) has been removed from \
                 the user database! Something strange is afoot. Exiting...");
-            return Err(
-                Error::new(
-                    ErrorKind::PermissionDenied, 
-                    "user who started the process no longer exists"
-                )
+            return Error::new(
+                ErrorKind::PermissionDenied,
+                "user who started the process no longer exists"
             );
         }
     };
@@ -124,11 +84,9 @@ fn raise_correct_error(devices_added: u8) -> Result<Libinput, std::io::Error> {
         None => {
             error!("You are, somehow, not a part of any user groups. \
                 Something strange is afoot. Exiting...");
-            return Err(
-                Error::new(
-                    ErrorKind::PermissionDenied, 
-                    "user is not in any user groups whatsoever"
-                )
+            return Error::new(
+                ErrorKind::PermissionDenied,
+                "user is not in any user groups whatsoever"
             );
         }
     };
@@ -139,7 +97,7 @@ fn raise_correct_error(devices_added: u8) -> Result<Libinput, std::io::Error> {
         .iter()
         .find(|group| group.name() == "input")
         .is_some();
-        
+
 
     if devices_added == 0 || !in_input_group {
         error!("This program does not have permission to access \
@@ -154,10 +112,8 @@ fn raise_correct_error(devices_added: u8) -> Result<Libinput, std::io::Error> {
             look into it as soon as possible."
         );
 
-        return Err(
-            Error::new(ErrorKind::PermissionDenied,
-                "not in user group 'input'"
-            )
+        return Error::new(ErrorKind::PermissionDenied,
+            "not in user group 'input'"
         );
     }
 
@@ -170,34 +126,32 @@ fn raise_correct_error(devices_added: u8) -> Result<Libinput, std::io::Error> {
         devices_added
     );
 
-    Err(
-        Error::new(
-            ErrorKind::PermissionDenied, 
-            "trackpad not discoverable by current user"
-        )
+    Error::new(
+        ErrorKind::PermissionDenied,
+        "trackpad not discoverable by current user"
     )
 }
 
 
-/// Find all devices that function as trackpads, returning
-/// a `Libinput` struct that will receive events from all
-/// trackpads.
-pub fn find_real_trackpads() -> Result<Libinput, std::io::Error> {
+/// Find all devices that function as trackpads, returning the `/dev/input/eventN`
+/// paths for each. The caller is responsible for opening these directly (not
+/// through libinput) so it can exclusively grab and proxy the raw event stream.
+pub fn find_real_trackpads() -> Result<Vec<String>, std::io::Error> {
 
     let mut all_inputs: Libinput = Libinput::new_with_udev(Interface);
     all_inputs.udev_assign_seat("seat0").unwrap();   // will not throw an error on failure!
 
-    // Events added are dropped by the find() in the next statement, so they need to be 
+    // Events added are dropped by the find() in the next statement, so they need to be
     // counted beforehand. Cloning all_inputs and finding the length of the collected Vec
     // gave me issues as well, so we're sticking to a more tranparent, reliable method.
     let mut dev_added_count: u8 = 0;
-    
+
     // Libinput adds "touchpad" to the device you use for a trackpad.
     // This finds theat device among all active ones on your computer.
     let all_trackpads: Vec<input::Device> = all_inputs.filter(
         |event| {
             dev_added_count += 1;
-            event.device().has_capability(Pointer) 
+            event.device().has_capability(Pointer)
             && event.device().has_capability(Gesture)
             // virtual trackpad only has "pointer" capability,
             // so that will not be added here
@@ -205,9 +159,19 @@ pub fn find_real_trackpads() -> Result<Libinput, std::io::Error> {
     ).map(|event| event.device())
     .collect();
 
-    if all_trackpads.len() == 0 { 
-        return raise_correct_error(dev_added_count); 
+    if all_trackpads.is_empty() {
+        return Err(raise_correct_error(dev_added_count));
     }
 
-    bind_to_real_trackpads(all_trackpads)
+    let paths: Vec<String> = all_trackpads.iter()
+        .map(|d| {
+            info!("A touchpad found and loaded.");
+            debug!("The touchpad device found: \"{}\" (udev path: /dev/input/{}).",
+                d.name(), d.sysname()
+            );
+            format!("/dev/input/{}", d.sysname())
+        })
+        .collect();
+
+    Ok(paths)
 }
