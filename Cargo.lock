@@ -301,7 +301,7 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "linux-3-finger-drag"
-version = "1.7.0"
+version = "2.0.0"
 dependencies = [
  "input-linux",
  "libc",

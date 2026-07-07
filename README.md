@@ -1,17 +1,9 @@
 # Three-Finger Drag for Wayland/KDE (and X11)
 
-Rest three fingers on the touchpad and move them: the window / text / icon
-under the cursor is dragged, exactly like macOS's "three finger drag".
-Lift, and the drag ends.
+Rest three fingers on the touchpad and move them: the window / text / icon under the cursor is dragged, exactly like macOS's "three finger drag". Lift, and the drag ends.
 
 The program is a full **evdev multitouch proxy** (replacing the
-earlier libinput-gesture-listener design). The proxy exists because
-of KWin: KDE hardcodes desktop-switching to *both* 3- and 4-finger
-horizontal swipes, with no setting to disable just the 3-finger binding
-(#18) — so a gesture listener that merely *watches* the touchpad can
-never stop KWin from also acting on the same three fingers. Owning the
-device and deciding per-frame what the compositor gets to see is the
-only clean fix.
+earlier libinput-gesture-listener design). The proxy exists because of KWin: KDE hardcodes desktop-switching to *both* 3- and 4-finger horizontal swipes, with no setting to disable just the 3-finger binding (#18) — so a gesture listener that merely *watches* the touchpad can never stop KWin from also acting on the same three fingers. Owning the device and deciding per-frame what the compositor gets to see is the only clean fix.
 
 ## How it works
 
@@ -127,15 +119,12 @@ than one touchpad (auto-discovery proxies the first one found).
 |---|---|---|
 | `acceleration` | `1.0` | drag speed multiplier (`> 1` faster, `< 1` slower) |
 | `dragEndDelay` | `0` | drag-lock, in ms: after lifting, the button stays held this long, and a new 3-finger touch inside the window **continues the same drag**. Any other touch releases the button *before* it is relayed, so post-drag pointer motion can never smear the held button around. `0` disables. |
-| `entryDebounce` | `50` | ms an ambiguous (2-3 finger, possibly still growing) fresh touch is withheld before committing: drag, or replay to the compositor |
-| `probeDelay` | `15` | ms a so-far-lone finger is withheld (just long enough to catch a 2nd/3rd finger landing a beat behind the 1st) |
-| `pressGrace` | `75` | ms a committed drag defers its button press while the fingers haven't moved. Lets a 4th finger that lands *after* the entry window (fast, sloppy 4-finger swipes stagger hard) abort the misclassified drag with no phantom click — the touch is handed to the compositor mid-gesture instead |
+| `entryDebounce` | `50` | length of time (in milliseconds) an ambiguous (2-3 finger, possibly still growing) fresh touch is withheld before committing: drag, or replay to the compositor |
+| `probeDelay` | `15` | Length of time (in milliseconds) a so-far-lone finger is withheld (just long enough to catch a 2nd/3rd finger landing a beat behind the 1st) |
+| `pressGrace` | `75` | Length of time (in milliseconds) a committed drag defers its button press while the fingers haven't moved. Lets a 4th finger that lands *after* the entry window (fast, sloppy 4-finger swipes stagger hard) abort the misclassified drag with no phantom click — the touch is handed to the compositor mid-gesture instead |
 | `logFile` | `"stdout"` | log destination (`"stdout"` or a file path) |
 | `logLevel` | `"info"` | `off` / `error` / `warn` / `info` / `debug` / `trace` |
 
-The old `responseTime` knob is gone: the loop is event-driven, so there
-is no poll interval to tune. A leftover `responseTime` in an existing
-config file is ignored harmlessly.
 
 ## Testing
 

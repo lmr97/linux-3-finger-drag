@@ -1,10 +1,10 @@
 # Changelog
 
-## Unreleased
+## 2.0.0 - 2026-07-06
 
 Architecture rewrite: the program is now an evdev multitouch proxy
 (exclusive grab + synthetic clone) with a pure, fully-tested gesture
-state machine and an event-driven runtime. Fixes #18.
+state machine and an event-driven runtime. Fixes #18. Courtesy of [Juao Driessen](https://github.com/joaodriessen).
 
 ### Fixed
 
