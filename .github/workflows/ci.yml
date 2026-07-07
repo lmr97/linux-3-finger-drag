@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: ["*"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --check
+
+      - name: Clippy (warnings are errors)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Gesture state-machine tests (incl. randomized invariants)
+        run: cargo test
+
+      # The software-in-the-loop test (tests/integration.rs) needs
+      # /dev/uinput and a live input stack, so it stays #[ignore]d here;
+      # run it locally: cargo test --test integration -- --ignored
+
+      - name: Release build
+        run: cargo build --release

@@ -742,4 +742,6 @@ impl GestureMachine {
 }
 
 #[cfg(test)]
+mod fuzz;
+#[cfg(test)]
 mod tests;
