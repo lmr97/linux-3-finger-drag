@@ -151,8 +151,7 @@ pub struct GestureMachine {
 
     /// True while a 3-finger drag owns the touch: nothing is relayed.
     suppressing: bool,
-    drag_ref_slot: Option<usize>,
-    drag_last_pos: Option<(i32, i32)>,
+    drag_last_pos: [Option<(i32, i32, i32)>; MAX_SLOTS],
     /// Sub-pixel motion carried between frames.
     carry: (f64, f64),
     /// While a committed drag hasn't moved yet: when to press the button
@@ -195,8 +194,7 @@ impl GestureMachine {
             current_slot: 0,
             relayed_active: [false; MAX_SLOTS],
             suppressing: false,
-            drag_ref_slot: None,
-            drag_last_pos: None,
+            drag_last_pos: [None; MAX_SLOTS],
             carry: (0.0, 0.0),
             press_deadline: None,
             real_keys: Vec::new(),
@@ -342,7 +340,7 @@ impl GestureMachine {
             // drive_drag reads self.slots directly next frame; the drop
             // may have moved the reference finger arbitrarily far, so
             // re-baseline rather than applying the gap as a cursor jump.
-            self.drag_last_pos = None;
+            self.drag_last_pos = [None; MAX_SLOTS];
         } else if self.touch_start.is_some() && !self.settled && self.active_count() == 0 {
             // Every finger lifted *inside* the dropped window while the
             // touch was still buffered. The buffer holds touchdowns whose
@@ -413,8 +411,7 @@ impl GestureMachine {
         if self.suppressing {
             if count == 0 {
                 self.suppressing = false;
-                self.drag_ref_slot = None;
-                self.drag_last_pos = None;
+                self.drag_last_pos = [None; MAX_SLOTS];
                 self.press_deadline = None;
                 // Reset touch bookkeeping: without this the next touch
                 // would inherit touch_max/settled from this drag and
@@ -456,8 +453,7 @@ impl GestureMachine {
                     debug!("late 4th finger: aborting committed drag, handing touch to compositor");
                 }
                 self.suppressing = false;
-                self.drag_ref_slot = None;
-                self.drag_last_pos = None;
+                self.drag_last_pos = [None; MAX_SLOTS];
                 self.press_deadline = None;
                 self.settled = true; // continues as an ordinary live touch
                 self.release_button(out);
@@ -689,39 +685,53 @@ impl GestureMachine {
     }
 
     fn drive_drag(&mut self, active: &[usize], out: &mut Vec<Output>) {
-        let reference = match self.drag_ref_slot {
-            Some(s) if active.contains(&s) => s,
-            _ => {
-                // first frame of the gesture, or the previous reference
-                // finger lifted and another took its place: re-baseline
-                // without applying a delta this frame.
-                let s = active[0];
-                self.drag_ref_slot = Some(s);
-                self.drag_last_pos = Some((self.slots[s].x, self.slots[s].y));
-                return;
+        let mut best: Option<(i32, i32, i64)> = None;
+
+        for &slot in active {
+            let current = self.slots[slot];
+            let candidate = match self.drag_last_pos[slot] {
+                Some((tracking_id, last_x, last_y)) if tracking_id == current.tracking_id => {
+                    Some((current.x - last_x, current.y - last_y))
+                }
+                _ => None,
+            };
+
+            self.drag_last_pos[slot] = Some((current.tracking_id, current.x, current.y));
+
+            if let Some((raw_dx, raw_dy)) = candidate {
+                let magnitude =
+                    i64::from(raw_dx) * i64::from(raw_dx) + i64::from(raw_dy) * i64::from(raw_dy);
+                if magnitude > 0
+                    && best.is_none_or(|(_, _, best_magnitude)| magnitude > best_magnitude)
+                {
+                    best = Some((raw_dx, raw_dy, magnitude));
+                }
             }
+        }
+
+        for slot in 0..self.slot_count {
+            if !active.contains(&slot) {
+                self.drag_last_pos[slot] = None;
+            }
+        }
+
+        let Some((raw_dx, raw_dy, _)) = best else {
+            return;
         };
 
-        let (x, y) = (self.slots[reference].x, self.slots[reference].y);
-        if let Some((lx, ly)) = self.drag_last_pos {
-            let px = (x - lx) as f64 / self.x_res * self.timing.px_per_mm + self.carry.0;
-            let py = (y - ly) as f64 / self.y_res * self.timing.px_per_mm + self.carry.1;
-            let dx = px.trunc() as i32;
-            let dy = py.trunc() as i32;
-            // carry the sub-pixel remainder instead of discarding it, so
-            // slow, precise drags don't systematically lose motion
-            self.carry = (px - dx as f64, py - dy as f64);
-            if dx != 0 || dy != 0 {
-                // real drag motion: the deferred press (if still pending)
-                // must land before the movement it accompanies
-                self.press_button(out);
-                out.push(Output::MouseMove { dx, dy });
-            }
-        } else {
-            self.drag_last_pos = Some((x, y));
-            return;
+        let px = raw_dx as f64 / self.x_res * self.timing.px_per_mm + self.carry.0;
+        let py = raw_dy as f64 / self.y_res * self.timing.px_per_mm + self.carry.1;
+        let dx = px.trunc() as i32;
+        let dy = py.trunc() as i32;
+        // carry the sub-pixel remainder instead of discarding it, so
+        // slow, precise drags don't systematically lose motion
+        self.carry = (px - dx as f64, py - dy as f64);
+        if dx != 0 || dy != 0 {
+            // real drag motion: the deferred press (if still pending)
+            // must land before the movement it accompanies
+            self.press_button(out);
+            out.push(Output::MouseMove { dx, dy });
         }
-        self.drag_last_pos = Some((x, y));
     }
 
     /// SLOT/TRACKING_ID/X/Y events asserting the current state of every

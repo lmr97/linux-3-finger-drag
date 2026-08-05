@@ -845,3 +845,50 @@ fn button_held_tracks_drag_state() {
     sim.frame_at(30, &cat(&[&up(0), &up(1), &up(2)]));
     assert!(!sim.m.button_held());
 }
+
+#[test]
+fn non_reference_finger_can_drive_drag() {
+    let mut sim = Sim::new();
+    let _ = start_drag(&mut sim);
+
+    // Slot 0 is the original reference and stays still. Slot 1 moves.
+    let outs = sim.frame_at(10, &mv(1, 640, 500));
+    assert_ne!(total_move(&outs), (0, 0));
+}
+
+#[test]
+fn remaining_finger_takes_over_after_original_reference_lifts() {
+    let mut sim = Sim::new();
+    let _ = start_drag(&mut sim);
+
+    let _ = sim.frame_at(10, &up(0));
+    let outs = sim.frame_at(10, &mv(1, 640, 500));
+    assert_ne!(total_move(&outs), (0, 0));
+}
+
+#[test]
+fn largest_active_finger_delta_drives_without_summing() {
+    let mut sim = Sim::new();
+    let _ = start_drag(&mut sim);
+
+    let outs = sim.frame_at(
+        10,
+        &cat(&[&mv(0, 510, 500), &mv(1, 640, 500), &mv(2, 730, 500)]),
+    );
+    let (dx, dy) = total_move(&outs);
+    assert_eq!(dy, 0);
+    assert_eq!(
+        dx, 48,
+        "the largest 40-unit delta must be emitted once, not summed"
+    );
+}
+
+#[test]
+fn replacement_tracking_id_does_not_create_a_jump() {
+    let mut sim = Sim::new();
+    let _ = start_drag(&mut sim);
+
+    // Reuse slot 0 for a newly landed finger at a distant position.
+    let outs = sim.frame_at(10, &cat(&[&up(0), &down(0, 200, 1400, 1400)]));
+    assert_eq!(total_move(&outs), (0, 0));
+}
