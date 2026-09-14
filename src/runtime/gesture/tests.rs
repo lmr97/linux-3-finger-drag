@@ -663,6 +663,71 @@ fn resync_live_touch_emits_correction() {
     assert!(evs.contains(&Ev::abs(ABS_MT_POSITION_X, 150)));
 }
 
+/// Resync during a live touch must NOT resend ABS_MT_TRACKING_ID for a
+/// slot the clone already believes is active: per the MT protocol that's
+/// a duplicate tracking-ID assignment (no intervening release), which
+/// libevdev flags as a BUG and which desyncs the compositor's per-slot
+/// finger accounting for the clone -- silently breaking two-finger
+/// scroll on the clone until the process restarts.
+#[test]
+fn resync_live_touch_does_not_resend_tracking_id_for_already_active_slot() {
+    let mut sim = Sim::new();
+    sim.frame(&down(0, 1, 100, 100));
+    sim.tick(15); // settled live -> slot 0 relayed as active with id 1
+
+    let mut snapshot = vec![(-1, 0, 0); 16];
+    snapshot[0] = (1, 150, 150); // same tracking id, just moved during the drop
+    let outs = sim.m.on_resync(&snapshot, sim.now);
+    let evs = synth_events(&outs);
+    assert!(
+        !evs.contains(&Ev::abs(ABS_MT_TRACKING_ID, 1)),
+        "already-active slot must not get its tracking ID resent: {evs:?}"
+    );
+}
+
+/// The buffering counterpart of the test above: a resync arriving while
+/// a touch is still undecided (buffered in `pending`, nothing relayed to
+/// the clone yet) must not requeue a tracking ID for a slot `pending`
+/// already opened. Before the fix, this path checked `relayed_active`
+/// (which only reflects the clone, not `pending`) and so happily queued
+/// a second ABS_MT_TRACKING_ID for the same slot with no release in
+/// between -- a self-inflicted double-tracking-ID once flushed, exactly
+/// the "kernel bug: double tracking ID" libevdev fault seen in the wild.
+#[test]
+fn resync_during_buffering_does_not_redeclare_pending_slot() {
+    let mut sim = Sim::new();
+    // 2 fingers: doesn't take the fast single-finger settle path, so the
+    // touch stays buffered (undecided) past this frame.
+    sim.frame(&cat(&[&down(0, 1, 100, 100), &down(1, 2, 200, 100)]));
+    sim.tick(10); // well inside entry_debounce (50ms) -- still buffering
+
+    // Resync reports the exact same two fingers, unchanged.
+    let snapshot = vec![(1, 100, 100), (2, 200, 100)]
+        .into_iter()
+        .chain(std::iter::repeat((-1, 0, 0)))
+        .take(16)
+        .collect::<Vec<_>>();
+    let outs = sim.m.on_resync(&snapshot, sim.now);
+    assert!(
+        synth_events(&outs).is_empty(),
+        "an unchanged resync while buffering must emit nothing directly: {outs:?}"
+    );
+
+    // Let the debounce window close; the touch settles as an ordinary
+    // (non-drag) 2-finger gesture and pending flushes as one batch.
+    let outs = sim.tick(50);
+    let evs = synth_events(&outs);
+    for id in [1, 2] {
+        assert_eq!(
+            evs.iter()
+                .filter(|e| **e == Ev::abs(ABS_MT_TRACKING_ID, id))
+                .count(),
+            1,
+            "tracking id {id} must be asserted exactly once in the flushed batch: {evs:?}"
+        );
+    }
+}
+
 /// Resync that reveals a finger lifted during the drop: the clone must
 /// get a release for it, or it holds a phantom touch forever.
 #[test]

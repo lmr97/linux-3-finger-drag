@@ -173,6 +173,13 @@ pub struct GestureMachine {
     /// Frames withheld from the compositor while a fresh touch is still
     /// being classified.
     pending: Vec<Ev>,
+    /// Which slots `pending` already carries a live (post-touchdown)
+    /// assertion for. Distinct from `relayed_active`: the clone hasn't
+    /// seen any of this yet, but once `pending` flushes it will --  so a
+    /// resync arriving *while still buffering* must treat this, not
+    /// `relayed_active`, as "does the clone already know" when deciding
+    /// whether to re-assert a slot's tracking ID (see `on_resync`).
+    pending_active: [bool; MAX_SLOTS],
     touch_start: Option<Instant>,
     touch_max: usize,
     settled: bool,
@@ -202,6 +209,7 @@ impl GestureMachine {
             real_keys: Vec::new(),
             clone_keys: Vec::new(),
             pending: Vec::new(),
+            pending_active: [false; MAX_SLOTS],
             touch_start: None,
             touch_max: 0,
             settled: false,
@@ -350,25 +358,59 @@ impl GestureMachine {
             // the synthetic device holding a touch forever. Swallow the
             // (rare) truncated tap instead; consistency wins.
             self.pending.clear();
+            self.pending_active = [false; MAX_SLOTS];
             self.touch_start = None;
             self.touch_max = 0;
         } else {
             // The synthetic device (or the buffer of a still-undecided
             // touch) may hold stale state. Correct it explicitly: release
             // any slot the clone believes is active but no longer is,
-            // then assert the authoritative position of every live slot.
+            // then assert the authoritative position of every live slot
+            // -- but only assign a *tracking ID* for a slot the clone
+            // doesn't already know is active. Resending
+            // ABS_MT_TRACKING_ID for a slot that's already open (no
+            // intervening release) is a duplicate tracking-ID
+            // assignment per the MT protocol: libevdev flags it as a
+            // BUG, and the compositor's per-slot accounting for the
+            // clone desyncs -- silently breaking two-finger scroll until
+            // the process restarts and rebuilds the clone from scratch.
+            //
+            // "Already know is active" means different things depending
+            // on whether we're buffering: once flushed, `relayed_active`
+            // is truth; but while a touch is still undecided, `pending`
+            // hasn't reached the clone yet at all, so *its* open slots
+            // are `pending_active`, not `relayed_active` (which is still
+            // whatever the *previous* touch left behind, almost always
+            // all-false). Using the wrong one here re-asserts a slot
+            // `pending` already opened -- the same double-tracking-ID
+            // bug, just self-inflicted inside one flushed batch instead
+            // of against the clone's real state.
+            let buffering = self.touch_start.is_some() && !self.settled;
+            let known = if buffering {
+                self.pending_active
+            } else {
+                self.relayed_active
+            };
             let mut correction = Vec::new();
             for slot in 0..self.slot_count {
-                if self.relayed_active[slot] && self.slots[slot].tracking_id < 0 {
+                let s = self.slots[slot];
+                if known[slot] && s.tracking_id < 0 {
                     correction.push(Ev::abs(ABS_MT_SLOT, slot as i32));
                     correction.push(Ev::abs(ABS_MT_TRACKING_ID, -1));
+                } else if s.tracking_id >= 0 {
+                    correction.push(Ev::abs(ABS_MT_SLOT, slot as i32));
+                    if !known[slot] {
+                        correction.push(Ev::abs(ABS_MT_TRACKING_ID, s.tracking_id));
+                    }
+                    correction.push(Ev::abs(ABS_MT_POSITION_X, s.x));
+                    correction.push(Ev::abs(ABS_MT_POSITION_Y, s.y));
                 }
             }
-            correction.extend(self.active_slot_dump());
             if !correction.is_empty() {
-                if self.touch_start.is_some() && !self.settled {
+                if buffering {
                     self.pending.extend(correction);
                     self.pending.push(Ev::syn());
+                    self.mark_pending();
                 } else {
                     let mut frame = correction;
                     frame.push(Ev::syn());
@@ -507,6 +549,7 @@ impl GestureMachine {
             self.touch_max = count;
             self.settled = false;
             self.pending.clear();
+            self.pending_active = [false; MAX_SLOTS];
         } else {
             self.touch_max = self.touch_max.max(count);
         }
@@ -531,6 +574,7 @@ impl GestureMachine {
         }
 
         self.pending.extend_from_slice(frame);
+        self.mark_pending();
 
         if self.touch_max >= 4 {
             // Unambiguously bigger than a 3-finger drag could ever be --
@@ -564,6 +608,7 @@ impl GestureMachine {
     fn resolve_touch_decision(&mut self, count: usize, now: Instant, out: &mut Vec<Output>) {
         if count == 3 && self.touch_max == 3 {
             self.pending.clear();
+            self.pending_active = [false; MAX_SLOTS];
             let active = self.active_slots();
             self.commit_drag(&active, now, out);
             return;
@@ -599,6 +644,9 @@ impl GestureMachine {
             self.note_clone_keys(&flushed);
             out.push(Output::EmitSynth(flushed));
         }
+        // pending is now empty (or was already) -- whatever it knew
+        // about is either relayed for real now, or moot.
+        self.pending_active = [false; MAX_SLOTS];
         self.mark_relayed();
     }
 
@@ -613,6 +661,14 @@ impl GestureMachine {
     fn mark_relayed(&mut self) {
         for slot in 0..MAX_SLOTS {
             self.relayed_active[slot] = self.slots[slot].tracking_id >= 0;
+        }
+    }
+
+    /// Like `mark_relayed`, but for what `pending` (not yet relayed to
+    /// the clone) already carries -- see `pending_active`.
+    fn mark_pending(&mut self) {
+        for slot in 0..MAX_SLOTS {
+            self.pending_active[slot] = self.slots[slot].tracking_id >= 0;
         }
     }
 
