@@ -45,11 +45,23 @@ const TOOL_BITS: [u16; 5] = [
 
 /// Shadow model of the synthetic clone: replays everything the machine
 /// emits, exactly as the kernel/libinput would accumulate it.
+///
+/// `active` mirrors libinput's own per-slot bookkeeping: libevdev flags
+/// a "double tracking ID" BUG whenever an incoming ABS_MT_TRACKING_ID
+/// doesn't actually change the slot's open/closed state -- a fresh
+/// (non-negative) id sent into a slot that's already open, or a -1 sent
+/// into a slot that's already closed. `feed` enforces exactly that,
+/// so a batch that (re)asserts the same slot twice without closing it
+/// first -- even split across two separate `EmitSynth` calls, as long
+/// as nothing else touched that slot in between -- fails loudly instead
+/// of the boolean-only check silently agreeing with itself.
 #[derive(Default)]
 struct ShadowClone {
     active: [bool; MAX_SLOTS],
     keys: Vec<(u16, i32)>,
     current_slot: usize,
+    seed: u64,
+    step: u32,
 }
 
 impl ShadowClone {
@@ -60,7 +72,18 @@ impl ShadowClone {
                     self.current_slot = (ev.value.max(0) as usize).min(MAX_SLOTS - 1);
                 }
                 (EV_ABS, ABS_MT_TRACKING_ID) => {
-                    self.active[self.current_slot] = ev.value >= 0;
+                    let now_active = ev.value >= 0;
+                    assert_ne!(
+                        self.active[self.current_slot], now_active,
+                        "double tracking ID {} in slot {} (redundant {}, no real state change) \
+                        (seed {}, step {})",
+                        ev.value,
+                        self.current_slot,
+                        if now_active { "open" } else { "close" },
+                        self.seed,
+                        self.step,
+                    );
+                    self.active[self.current_slot] = now_active;
                 }
                 (EV_KEY, code) => {
                     if let Some(e) = self.keys.iter_mut().find(|e| e.0 == code) {
@@ -202,7 +225,10 @@ fn run_scenario(seed: u64, drag_end_delay_ms: u64) {
         10.0,
         16,
     );
-    let mut shadow = ShadowClone::default();
+    let mut shadow = ShadowClone {
+        seed,
+        ..Default::default()
+    };
     let mut hand = Hand::new();
     let mut now = Instant::now();
     let mut expect_held = false;
@@ -225,6 +251,7 @@ fn run_scenario(seed: u64, drag_end_delay_ms: u64) {
     };
 
     for step in 0..2500u32 {
+        shadow.step = step;
         // random action: land / lift / wiggle / idle
         let evs = match rng.below(10) {
             0..=2 => hand.land(&mut rng),
