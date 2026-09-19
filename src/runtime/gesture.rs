@@ -354,12 +354,17 @@ impl GestureMachine {
             self.touch_max = 0;
         } else {
             // The synthetic device (or the buffer of a still-undecided
-            // touch) may hold stale state. Correct it explicitly: release
-            // any slot the clone believes is active but no longer is,
+            // touch) may hold stale state. Correct it explicitly:
+            // release ALL slots the clone believes are active first,
             // then assert the authoritative position of every live slot.
+            // Previously only released slots where clone=active but
+            // kernel=inactive; slots where both agreed on the same
+            // tracking ID got a duplicate ABS_MT_TRACKING_ID, which
+            // libinput rejects as "double tracking ID" and eventually
+            // corrupts the touch state (breaking two-finger scrolling).
             let mut correction = Vec::new();
             for slot in 0..self.slot_count {
-                if self.relayed_active[slot] && self.slots[slot].tracking_id < 0 {
+                if self.relayed_active[slot] {
                     correction.push(Ev::abs(ABS_MT_SLOT, slot as i32));
                     correction.push(Ev::abs(ABS_MT_TRACKING_ID, -1));
                 }
