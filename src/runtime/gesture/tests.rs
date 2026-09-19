@@ -746,6 +746,65 @@ fn resync_with_all_lifted_during_pending_swallows_cleanly() {
     assert!(!synth_events(&outs).is_empty()); // settles normally
 }
 
+/// Resync where the slot state hasn't changed (same tracking IDs still
+/// active) must NOT send duplicate ABS_MT_TRACKING_ID events. Before
+/// the fix, only slots that *lifted* during the drop were released;
+/// slots still active got a bare re-assert, which libinput rejected as
+/// "double tracking ID" and eventually corrupted the touch state,
+/// breaking two-finger scrolling.
+#[test]
+fn resync_with_unchanged_slots_no_duplicate_tracking_id() {
+    let mut sim = Sim::new();
+    // Two-finger touch settled and relayed
+    sim.frame(&cat(&[&down(0, 1, 100, 100), &down(1, 2, 200, 100)]));
+    sim.tick(50);
+
+    // Snapshot shows the same two slots still active (just moved)
+    let mut snapshot = vec![(-1, 0, 0); 16];
+    snapshot[0] = (1, 110, 110);
+    snapshot[1] = (2, 210, 110);
+    let outs = sim.m.on_resync(&snapshot, sim.now);
+    let evs = synth_events(&outs);
+
+    // Count how many times tracking_id=1 appears for slot 0.
+    // It must appear exactly once (the release=-1, then re-assert=1).
+    // Before the fix it appeared twice (no release, just duplicate assert).
+    let mut slot0_tracking_id_count = 0;
+    let mut current_slot = 0i32;
+    for ev in &evs {
+        if ev.type_ == EV_ABS && ev.code == ABS_MT_SLOT {
+            current_slot = ev.value;
+        }
+        if ev.type_ == EV_ABS && ev.code == ABS_MT_TRACKING_ID && current_slot == 0 {
+            if ev.value >= 0 {
+                slot0_tracking_id_count += 1;
+            }
+        }
+    }
+    assert_eq!(
+        slot0_tracking_id_count, 1,
+        "tracking_id for slot 0 must appear exactly once (no double), got {slot0_tracking_id_count}: {evs:?}"
+    );
+
+    // Same check for slot 1
+    let mut slot1_tracking_id_count = 0;
+    let mut current_slot = 0i32;
+    for ev in &evs {
+        if ev.type_ == EV_ABS && ev.code == ABS_MT_SLOT {
+            current_slot = ev.value;
+        }
+        if ev.type_ == EV_ABS && ev.code == ABS_MT_TRACKING_ID && current_slot == 1 {
+            if ev.value >= 0 {
+                slot1_tracking_id_count += 1;
+            }
+        }
+    }
+    assert_eq!(
+        slot1_tracking_id_count, 1,
+        "tracking_id for slot 1 must appear exactly once (no double), got {slot1_tracking_id_count}: {evs:?}"
+    );
+}
+
 // =========================================================================
 // robustness details
 // =========================================================================
