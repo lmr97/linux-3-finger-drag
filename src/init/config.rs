@@ -103,6 +103,23 @@ pub struct Configuration {
     #[serde(default = "default_75ms")]
     #[serde_as(as = "serde_with::DurationMilliSeconds<u64>")]
     pub press_grace: Duration, // in milliseconds
+
+    // Which virtual mouse button a drag holds: "left" (default) or
+    // "right". Desktops apply their left-handed mouse setting to the
+    // virtual mouse too, swapping its buttons -- so on a left-handed
+    // setup a drag would arrive as a held RIGHT button (context menus
+    // instead of drags). Set "right" there and the swap turns it back
+    // into the left press apps need.
+    #[serde(default)]
+    pub drag_button: DragButton,
+}
+
+#[derive(Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DragButton {
+    #[default]
+    Left,
+    Right,
 }
 
 impl Configuration {
@@ -129,6 +146,7 @@ impl Default for Configuration {
             entry_debounce: Duration::from_millis(50),
             probe_delay: Duration::from_millis(15),
             press_grace: Duration::from_millis(75),
+            drag_button: DragButton::Left,
         }
     }
 }

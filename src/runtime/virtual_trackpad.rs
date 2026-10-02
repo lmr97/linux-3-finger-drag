@@ -23,6 +23,11 @@ use tracing::{debug, error};
 pub struct VirtualTrackpad {
     handle: UInputHandle<File>,
     pub mouse_is_down: bool,
+    /// Which button a drag presses (see the `dragButton` config option).
+    drag_button: Key,
+    /// The button actually held right now, so a release always matches
+    /// the press even if `dragButton` is hot-reloaded mid-drag.
+    pressed: Option<Key>,
 }
 
 pub fn start_handler() -> Result<VirtualTrackpad, std::io::Error> {
@@ -46,6 +51,13 @@ pub fn start_handler() -> Result<VirtualTrackpad, std::io::Error> {
 
     uhandle.set_evbit(EventKind::Key)?;
     uhandle.set_keybit(Key::ButtonLeft)?;
+    // Also advertise a right button, so a drag can press it instead of
+    // the left one. GNOME/KDE's left-handed mouse setting swaps the
+    // buttons of every mouse-type device -- including this one -- so
+    // with that setting on, BTN_RIGHT is what arrives at apps as a left
+    // press. (Advertising both also makes this look like an ordinary
+    // mouse rather than an unusual one-button device.)
+    uhandle.set_keybit(Key::ButtonRight)?;
 
     uhandle.set_evbit(EventKind::Relative)?;
     uhandle.set_relbit(RelativeAxis::X)?;
@@ -67,6 +79,8 @@ pub fn start_handler() -> Result<VirtualTrackpad, std::io::Error> {
     Ok(VirtualTrackpad {
         handle: uhandle,
         mouse_is_down: false,
+        drag_button: Key::ButtonLeft,
+        pressed: None,
     })
 }
 
@@ -82,11 +96,23 @@ impl VirtualTrackpad {
         .into_raw()
     }
 
+    /// Choose which button drags press: `true` for BTN_RIGHT (for
+    /// left-handed mouse setups), `false` for BTN_LEFT. Takes effect at
+    /// the next press; a button already held is still released as-is.
+    pub fn set_drag_button_right(&mut self, right: bool) {
+        self.drag_button = if right {
+            Key::ButtonRight
+        } else {
+            Key::ButtonLeft
+        };
+    }
+
     pub fn mouse_down(&mut self) -> Result<(), std::io::Error> {
+        let key = self.pressed.unwrap_or(self.drag_button);
         let events = [
             InputEvent::from(KeyEvent::new(
                 VirtualTrackpad::ZERO,
-                Key::ButtonLeft,
+                key,
                 KeyState::pressed(true),
             ))
             .into_raw(),
@@ -94,14 +120,16 @@ impl VirtualTrackpad {
         ];
         self.handle.write(&events)?;
         self.mouse_is_down = true;
+        self.pressed = Some(key);
         Ok(())
     }
 
     pub fn mouse_up(&mut self) -> Result<(), std::io::Error> {
+        let key = self.pressed.take().unwrap_or(self.drag_button);
         let events = [
             InputEvent::from(KeyEvent::new(
                 VirtualTrackpad::ZERO,
-                Key::ButtonLeft,
+                key,
                 KeyState::pressed(false),
             ))
             .into_raw(),
