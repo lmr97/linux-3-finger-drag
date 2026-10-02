@@ -5,5 +5,6 @@
     "logLevel": "info",
     "entryDebounce": 50,
     "probeDelay": 15,
-    "pressGrace": 75
+    "pressGrace": 75,
+    "dragButton": "left"
 }

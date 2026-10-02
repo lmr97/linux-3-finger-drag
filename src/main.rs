@@ -103,6 +103,7 @@ async fn main() -> Result<(), io::Error> {
     };
 
     let mut vtrackpad = virtual_trackpad::start_handler()?;
+    vtrackpad.set_drag_button_right(configs.drag_button == config::DragButton::Right);
 
     // run() holds the real event loop; wrapping it like this guarantees
     // the virtual devices are destroyed on the way out no matter how it
@@ -186,6 +187,7 @@ async fn run(
                         cfg_mtime = new_mtime;
                         cfg = config::init_cfg();
                         machine.set_timing(cfg.timing());
+                        vtp.set_drag_button_right(cfg.drag_button == config::DragButton::Right);
                         info!("Configuration reloaded (log settings need a restart).");
                     }
                 }
