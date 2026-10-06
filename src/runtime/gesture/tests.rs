@@ -648,6 +648,194 @@ fn drag_lock_times_out() {
 // SYN_DROPPED recovery
 // =========================================================================
 
+/// Replay emitted slot deltas as the downstream evdev device does. A
+/// SLOT selection persists across SYN_REPORT; it is not reset per frame.
+struct SlotReader {
+    current: usize,
+    slots: [(i32, i32, i32); MAX_SLOTS],
+}
+
+impl SlotReader {
+    fn new() -> Self {
+        Self {
+            current: 0,
+            slots: [(-1, 0, 0); MAX_SLOTS],
+        }
+    }
+
+    fn feed(&mut self, outputs: &[Output]) {
+        for ev in synth_events(outputs) {
+            match (ev.type_, ev.code) {
+                (EV_ABS, ABS_MT_SLOT) => self.current = ev.value as usize,
+                (EV_ABS, ABS_MT_TRACKING_ID) => self.slots[self.current].0 = ev.value,
+                (EV_ABS, ABS_MT_POSITION_X) => self.slots[self.current].1 = ev.value,
+                (EV_ABS, ABS_MT_POSITION_Y) => self.slots[self.current].2 = ev.value,
+                _ => {}
+            }
+        }
+    }
+}
+
+#[test]
+fn regression_implicit_slot_after_suppressed_drag() {
+    let mut sim = Sim::new();
+    let mut clone = SlotReader::new();
+    clone.feed(&start_drag(&mut sim));
+    clone.feed(&sim.frame(&cat(&[&up(0), &up(1), &up(2)])));
+
+    // Hardware is still on slot 2 and omits ABS_MT_SLOT on the next
+    // touchdown. The clone never saw the suppressed selections.
+    clone.feed(&sim.frame(&down(2, 900, 800, 500)[1..]));
+    clone.feed(&sim.tick(15));
+    assert_eq!(clone.slots[2], (900, 800, 500));
+    assert_eq!(
+        clone.slots[0].0, -1,
+        "must not create a phantom slot 0 touch"
+    );
+    clone.feed(&sim.frame(&[Ev::abs(ABS_MT_TRACKING_ID, -1)]));
+    assert!(clone.slots.iter().all(|s| s.0 == -1));
+}
+
+#[test]
+fn regression_implicit_slot_after_late_fourth_handoff() {
+    let mut sim = Sim::new();
+    let mut clone = SlotReader::new();
+    clone.feed(&commit_drag_only(&mut sim));
+    // The fourth finger uses slot 1 after its previous finger lifted.
+    // Snapshot emission ends at slot 2; hardware remains on slot 1.
+    clone.feed(&sim.frame(&up(1)));
+    clone.feed(&sim.frame(&down(3, 103, 800, 500)));
+    clone.feed(&sim.frame(&down(1, 104, 600, 500)));
+    clone.feed(&sim.frame(&[Ev::abs(ABS_MT_POSITION_X, 620)]));
+    assert_eq!(
+        clone.slots[1].1, 620,
+        "motion must update the hardware-selected slot"
+    );
+    assert_eq!(clone.slots[3].1, 800, "other fingers must not jump");
+}
+
+#[test]
+fn regression_implicit_slot_after_resync() {
+    let mut sim = Sim::new();
+    let mut clone = SlotReader::new();
+    clone.feed(&sim.frame(&cat(&[&down(1, 2, 200, 100), &down(0, 1, 100, 100)])));
+    clone.feed(&sim.tick(50));
+    let mut snapshot = vec![(-1, 0, 0); 16];
+    snapshot[0] = (1, 100, 100);
+    snapshot[1] = (2, 200, 100);
+    clone.feed(&sim.m.on_resync(&snapshot, sim.m.current_slot, &[], sim.now));
+    clone.feed(&sim.frame(&[Ev::abs(ABS_MT_POSITION_X, 110)]));
+    assert_eq!(clone.slots[0].1, 110);
+    assert_eq!(clone.slots[1].1, 200);
+}
+
+#[test]
+fn regression_resync_releases_stuck_tool_keys() {
+    const BTN_TOUCH: u16 = 0x14a;
+    const BTN_TOOL_FINGER: u16 = 0x145;
+    const BTN_LEFT: u16 = 0x110;
+    let mut sim = Sim::new();
+    sim.frame(&cat(&[
+        &down(0, 1, 100, 100),
+        &[
+            Ev::new(EV_KEY, BTN_TOUCH, 1),
+            Ev::new(EV_KEY, BTN_TOOL_FINGER, 1),
+            Ev::new(EV_KEY, BTN_LEFT, 1),
+        ],
+    ]));
+    sim.tick(15);
+    let snapshot = vec![(-1, 0, 0); 16];
+    let keys = [(BTN_TOUCH, 0), (BTN_TOOL_FINGER, 0), (BTN_LEFT, 0)];
+    let outputs = sim
+        .m
+        .on_resync(&snapshot, sim.m.current_slot, &keys, sim.now);
+    let events = synth_events(&outputs);
+    assert!(
+        events.contains(&Ev::new(EV_KEY, BTN_TOUCH, 0)),
+        "lost liftoff must release BTN_TOUCH"
+    );
+    assert!(
+        events.contains(&Ev::new(EV_KEY, BTN_TOOL_FINGER, 0)),
+        "lost liftoff must release tool count"
+    );
+    assert!(
+        events.contains(&Ev::new(EV_KEY, BTN_LEFT, 0)),
+        "lost physical button release must be restored"
+    );
+}
+
+#[test]
+fn regression_resync_releases_replaced_tracking_ids_first() {
+    let mut sim = Sim::new();
+    sim.frame(&cat(&[&down(0, 1, 100, 100), &down(1, 2, 200, 100)]));
+    sim.tick(50);
+    let mut snapshot = vec![(-1, 0, 0); 16];
+    snapshot[0] = (2, 210, 100);
+    snapshot[1] = (1, 110, 100);
+    let outputs = sim.m.on_resync(&snapshot, sim.m.current_slot, &[], sim.now);
+    let mut ids = [1, 2];
+    let mut current = 1;
+    for ev in synth_events(&outputs) {
+        match (ev.type_, ev.code) {
+            (EV_ABS, ABS_MT_SLOT) => current = ev.value as usize,
+            (EV_ABS, ABS_MT_TRACKING_ID) => {
+                ids[current] = ev.value;
+                assert!(
+                    ids[0] < 0 || ids[1] < 0 || ids[0] != ids[1],
+                    "resync must never emit duplicate live tracking IDs"
+                );
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(ids, [2, 1]);
+}
+
+#[test]
+fn regression_resync_restores_input_slot_selected_during_drop() {
+    let mut sim = Sim::new();
+    let mut clone = SlotReader::new();
+    clone.feed(&sim.frame(&down(0, 1, 100, 100)));
+    clone.feed(&sim.tick(15));
+    // A new contact selected slot 1 inside the lost-event window.
+    let mut snapshot = vec![(-1, 0, 0); 16];
+    snapshot[0] = (1, 100, 100);
+    snapshot[1] = (2, 200, 100);
+    clone.feed(&sim.m.on_resync(&snapshot, 1, &[], sim.now));
+    clone.feed(&sim.frame(&[Ev::abs(ABS_MT_TRACKING_ID, -1)]));
+    assert_eq!(sim.m.active_count(), 1);
+    assert_eq!(clone.slots[0].0, 1);
+    assert_eq!(clone.slots[1].0, -1);
+}
+
+#[test]
+fn regression_resync_rebuilds_pending_touch_without_stale_contacts() {
+    let mut sim = Sim::new();
+    let mut clone = SlotReader::new();
+    clone.feed(&sim.frame(&down(0, 1, 100, 100))); // still buffered
+    let mut snapshot = vec![(-1, 0, 0); 16];
+    snapshot[1] = (2, 200, 100); // first contact lifted, another landed
+    clone.feed(&sim.m.on_resync(&snapshot, 1, &[], sim.now));
+    clone.feed(&sim.tick(15));
+    assert_eq!(clone.slots[0].0, -1);
+    assert_eq!(clone.slots[1].0, 2);
+    clone.feed(&sim.frame(&[Ev::abs(ABS_MT_TRACKING_ID, -1)]));
+    assert!(clone.slots.iter().all(|s| s.0 == -1));
+}
+
+#[test]
+fn regression_implicit_slot_before_explicit_selection_in_same_frame() {
+    let mut sim = Sim::new();
+    let mut clone = SlotReader::new();
+    clone.feed(&start_drag(&mut sim));
+    clone.feed(&sim.frame(&cat(&[&up(0), &up(1), &up(2)])));
+    // Slot 2 is implicit at the start, then the frame selects slot 0.
+    clone.feed(&sim.frame(&cat(&[&down(2, 4, 800, 100)[1..], &down(0, 5, 100, 100)])));
+    clone.feed(&sim.tick(50));
+    assert_eq!(clone.slots[2], (4, 800, 100));
+    assert_eq!(clone.slots[0], (5, 100, 100));
+}
+
 /// Resync during a live (settled) touch: the clone gets an explicit
 /// correction frame asserting the authoritative positions.
 #[test]
@@ -658,7 +846,7 @@ fn resync_live_touch_emits_correction() {
 
     let mut snapshot = vec![(-1, 0, 0); 16];
     snapshot[0] = (1, 150, 150); // moved during the drop
-    let outs = sim.m.on_resync(&snapshot, sim.now);
+    let outs = sim.m.on_resync(&snapshot, sim.m.current_slot, &[], sim.now);
     let evs = synth_events(&outs);
     assert!(evs.contains(&Ev::abs(ABS_MT_POSITION_X, 150)));
 }
@@ -673,7 +861,7 @@ fn resync_releases_slots_that_lifted_during_the_drop() {
 
     let mut snapshot = vec![(-1, 0, 0); 16];
     snapshot[0] = (1, 100, 100); // slot 1 lifted during the drop
-    let outs = sim.m.on_resync(&snapshot, sim.now);
+    let outs = sim.m.on_resync(&snapshot, sim.m.current_slot, &[], sim.now);
     let evs = synth_events(&outs);
     let has_release = evs
         .windows(2)
@@ -696,7 +884,7 @@ fn resync_during_drag_rebaselines_without_jump() {
     snapshot[0] = (100, 900, 900); // reference finger "teleported" in the drop
     snapshot[1] = (101, 600, 500);
     snapshot[2] = (102, 700, 500);
-    let outs = sim.m.on_resync(&snapshot, sim.now);
+    let outs = sim.m.on_resync(&snapshot, sim.m.current_slot, &[], sim.now);
     assert_eq!(
         total_move(&outs),
         (0, 0),
@@ -716,7 +904,7 @@ fn resync_with_all_lifted_ends_drag() {
     start_drag(&mut sim);
 
     let snapshot = vec![(-1, 0, 0); 16];
-    let outs = sim.m.on_resync(&snapshot, sim.now);
+    let outs = sim.m.on_resync(&snapshot, sim.m.current_slot, &[], sim.now);
     assert_eq!(
         mouse_ups(&outs),
         1,
@@ -733,7 +921,7 @@ fn resync_with_all_lifted_during_pending_swallows_cleanly() {
     sim.frame(&cat(&[&down(0, 1, 100, 100), &down(1, 2, 200, 100)]));
 
     let snapshot = vec![(-1, 0, 0); 16];
-    let outs = sim.m.on_resync(&snapshot, sim.now);
+    let outs = sim.m.on_resync(&snapshot, sim.m.current_slot, &[], sim.now);
     assert!(
         synth_events(&outs).is_empty(),
         "a touchdown whose release was dropped must not be flushed"
@@ -776,7 +964,7 @@ fn small_slot_count_has_no_phantom_slots() {
     let snapshot = [(0, 0, 0); 16];
     // slots 0-4 zeroed = 5 "active" (a genuinely full pad); the machine
     // must at least never count slots 5-15
-    m.on_resync(&snapshot[..5.min(snapshot.len())], now);
+    m.on_resync(&snapshot[..5.min(snapshot.len())], 0, &[], now);
     assert_eq!(m.active_count(), 5);
     let m2 = GestureMachine::new(timing(0), RES, RES, 5);
     assert_eq!(m2.slot_count, 5);

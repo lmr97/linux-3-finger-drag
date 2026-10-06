@@ -148,6 +148,7 @@ pub struct GestureMachine {
     current_slot: usize,
     /// Which slots the *synthetic clone* currently believes are active.
     relayed_active: [bool; MAX_SLOTS],
+    relayed_ids: [i32; MAX_SLOTS],
 
     /// True while a 3-finger drag owns the touch: nothing is relayed.
     suppressing: bool,
@@ -194,6 +195,7 @@ impl GestureMachine {
             slots: [Slot::default(); MAX_SLOTS],
             current_slot: 0,
             relayed_active: [false; MAX_SLOTS],
+            relayed_ids: [-1; MAX_SLOTS],
             suppressing: false,
             drag_ref_slot: None,
             drag_last_pos: None,
@@ -296,6 +298,22 @@ impl GestureMachine {
     /// be fed; discard them and call [`on_resync`](Self::on_resync)
     /// with a fresh kernel snapshot instead.
     pub fn on_frame(&mut self, frame: &[Ev], now: Instant) -> Vec<Output> {
+        // evdev omits ABS_MT_SLOT when the selected slot has not changed.
+        // Suppressed frames and our synthesized corrections can leave the
+        // clone on a different slot from the hardware. Make implicit slot
+        // deltas self-contained *before* buffering them, using the input
+        // selection at the START of this frame, not its final selection.
+        let mut explicit_frame = Vec::new();
+        let first_mt = frame
+            .iter()
+            .find(|ev| ev.type_ == EV_ABS && (ABS_MT_SLOT..=0x3d).contains(&ev.code));
+        let frame = if first_mt.is_some_and(|ev| ev.code != ABS_MT_SLOT) {
+            explicit_frame.push(Ev::abs(ABS_MT_SLOT, self.current_slot as i32));
+            explicit_frame.extend_from_slice(frame);
+            &explicit_frame
+        } else {
+            frame
+        };
         // 1. fold the frame's slot and key-state updates into our model
         for ev in frame {
             if ev.type_ == EV_KEY {
@@ -323,8 +341,16 @@ impl GestureMachine {
 
     /// Reconcile with an authoritative kernel snapshot after the kernel
     /// reported dropped events (SYN_DROPPED). Whatever the dropped
-    /// events said is gone; `snapshot` is the truth now.
-    pub fn on_resync(&mut self, snapshot: &SlotSnapshot, now: Instant) -> Vec<Output> {
+    /// events said is gone; `snapshot` is the truth now. `current_slot`
+    /// is ABS_MT_SLOT's current value, and `keys` contains the supported
+    /// keys' EVIOCGKEY state, including releases. Also used at startup.
+    pub fn on_resync(
+        &mut self,
+        snapshot: &SlotSnapshot,
+        current_slot: usize,
+        keys: &[(u16, i32)],
+        now: Instant,
+    ) -> Vec<Output> {
         for slot in 0..MAX_SLOTS {
             self.slots[slot] = match snapshot.get(slot) {
                 Some(&(id, x, y)) => Slot {
@@ -335,6 +361,8 @@ impl GestureMachine {
                 None => Slot::default(),
             };
         }
+        self.current_slot = current_slot.min(self.slot_count - 1);
+        self.real_keys = keys.to_vec();
 
         let mut out = Vec::new();
 
@@ -343,28 +371,48 @@ impl GestureMachine {
             // may have moved the reference finger arbitrarily far, so
             // re-baseline rather than applying the gap as a cursor jump.
             self.drag_last_pos = None;
-        } else if self.touch_start.is_some() && !self.settled && self.active_count() == 0 {
-            // Every finger lifted *inside* the dropped window while the
-            // touch was still buffered. The buffer holds touchdowns whose
-            // matching releases were dropped -- flushing it would leave
-            // the synthetic device holding a touch forever. Swallow the
-            // (rare) truncated tap instead; consistency wins.
-            self.pending.clear();
-            self.touch_start = None;
-            self.touch_max = 0;
         } else {
-            // The synthetic device (or the buffer of a still-undecided
-            // touch) may hold stale state. Correct it explicitly: release
-            // any slot the clone believes is active but no longer is,
-            // then assert the authoritative position of every live slot.
+            // A pending touch may contain touchdowns whose matching
+            // releases were dropped. Rebuild it from the snapshot instead
+            // of replaying that stale history. A touch that started entirely
+            // inside the dropped window still needs normal classification.
+            if !self.settled {
+                self.pending.clear();
+                if self.active_count() == 0 {
+                    self.touch_start = None;
+                    self.touch_max = 0;
+                } else if self.touch_start.is_none() {
+                    self.touch_start = Some(now);
+                    self.touch_max = self.active_count();
+                }
+            }
+
             let mut correction = Vec::new();
             for slot in 0..self.slot_count {
-                if self.relayed_active[slot] && self.slots[slot].tracking_id < 0 {
+                // Release replaced IDs as well as lifted fingers, before
+                // introducing any IDs in their new slots. Otherwise an ID
+                // moved between slots can temporarily be live twice.
+                if self.relayed_ids[slot] >= 0
+                    && self.relayed_ids[slot] != self.slots[slot].tracking_id
+                {
                     correction.push(Ev::abs(ABS_MT_SLOT, slot as i32));
                     correction.push(Ev::abs(ABS_MT_TRACKING_ID, -1));
                 }
             }
             correction.extend(self.active_slot_dump());
+            // EVIOCGMTSLOTS does not include BTN_TOUCH, tool-count bits,
+            // or physical buttons. Those must come from EVIOCGKEY; a lost
+            // release must not leave libinput holding a phantom touch.
+            for &(code, value) in &self.clone_keys {
+                if value != 0 && Self::key_value(&self.real_keys, code) == 0 {
+                    correction.push(Ev::new(EV_KEY, code, 0));
+                }
+            }
+            for &(code, value) in &self.real_keys {
+                if value != 0 && Self::key_value(&self.clone_keys, code) != value {
+                    correction.push(Ev::new(EV_KEY, code, value));
+                }
+            }
             if !correction.is_empty() {
                 if self.touch_start.is_some() && !self.settled {
                     self.pending.extend(correction);
@@ -373,6 +421,7 @@ impl GestureMachine {
                     let mut frame = correction;
                     frame.push(Ev::syn());
                     self.mark_relayed();
+                    self.note_clone_keys(&frame);
                     out.push(Output::EmitSynth(frame));
                 }
             }
@@ -613,6 +662,7 @@ impl GestureMachine {
     fn mark_relayed(&mut self) {
         for slot in 0..MAX_SLOTS {
             self.relayed_active[slot] = self.slots[slot].tracking_id >= 0;
+            self.relayed_ids[slot] = self.slots[slot].tracking_id;
         }
     }
 
@@ -656,6 +706,7 @@ impl GestureMachine {
                 release.push(Ev::abs(ABS_MT_SLOT, slot as i32));
                 release.push(Ev::abs(ABS_MT_TRACKING_ID, -1));
                 self.relayed_active[slot] = false;
+                self.relayed_ids[slot] = -1;
             }
         }
         for i in 0..self.clone_keys.len() {

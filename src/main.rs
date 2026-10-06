@@ -155,6 +155,7 @@ async fn run(
             proxy.y_res(),
             proxy.slot_count(),
         );
+        proxy.initialize(&mut machine, vtp)?;
         let watch = AsyncFd::with_interest(FdWatch(proxy.as_raw_fd()), Interest::READABLE)?;
 
         info!("linux-3-finger-drag started successfully!");
