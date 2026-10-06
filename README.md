@@ -10,7 +10,7 @@ The program is a full **evdev multitouch proxy** (replacing the earlier libinput
  real touchpad ──(exclusive grab)──> linux-3-finger-drag
                                         │        │
                                         │        ├──> synthetic touchpad clone
-                                        │        │    (byte-identical mirror of
+                                        │        │    (faithful event mirror of
                                         │        │     everything that is NOT a
                                         │        │     3-finger drag)
                                      gesture     │
@@ -22,7 +22,7 @@ The program is a full **evdev multitouch proxy** (replacing the earlier libinput
 * The real touchpad is **exclusively grabbed** for the program's whole lifetime. The compositor instead reads a **synthetic clone** that impersonates the real device's identity (name/vendor/product), so saved per-device settings (natural scrolling, tap-to-click, pointer accel…) keep applying. The clone carries a `phys` marker (`linux-3-finger-drag/proxy`) so the proxy can always tell its own clone apart from real hardware.
 * A fresh touch is **withheld** from the compositor until classified: a lone finger goes live after `probeDelay` (default 15 ms — ordinary pointer motion never feels delayed), an ambiguous 2-3 finger touch waits out `entryDebounce` (default 50 ms), 4+ fingers goes live instantly. Real fingers land and lift asynchronously; judging a touch frame-by-frame (the naive approach) leaks phantom taps and misreads gestures.
 * A touch that holds at **exactly 3 fingers** through the debounce becomes a drag: the compositor never learns those fingers existed (KWin can't desktop-switch on what it can't see), and finger motion drives the virtual mouse with the left button held. The drag ends when the last finger lifts — staggered liftoffs can't leak trailing 1-2 finger touches (which libinput would read as a right-click tap).
-* Anything else — taps (3-finger tap still middle-clicks!), scrolls, 4-finger gestures, quick flicks — is replayed to the clone verbatim.
+* Anything else — taps (3-finger tap still middle-clicks!), scrolls, 4-finger gestures, quick flicks — is replayed to the clone. Implicit slot selections are made explicit when needed so the clone receives each update on the correct finger, even after suppressed input or state recovery.
 
 The classification logic lives in a pure, I/O-free state machine (`src/runtime/gesture.rs`) driven by an injected clock, with a regression test suite encoding every failure mode this project has hit live (`src/runtime/gesture/tests.rs`). The event loop is fully event-driven (epoll on the device fd + exact decision deadlines): idle CPU is zero, and no polling interval sits between your fingers and a decision.
 
@@ -97,7 +97,9 @@ cargo test                                    # gesture regression suite (pure, 
 cargo test --test integration -- --ignored    # software-in-the-loop, see below
 ```
 
-The integration test creates a **fake touchpad** via uinput, points the real binary at it (`--device`), injects scripted multi-finger sequences, and asserts on what actually comes out of the clone and the virtual mouse. It exercises the entire evdev plumbing without touching your real touchpad — but its output devices are real input devices, so the compositor will act on them (the test parks the cursor at the right screen edge and produces one brief left-click there). Run it from a session where that's acceptable.
+The integration test creates a **fake touchpad** via uinput, points the real binary at it (`--device`), injects scripted multi-finger sequences, and asserts on what actually comes out of the clone and the virtual mouse. It checks implicit slot selections and forces a real `SYN_DROPPED` queue overflow to verify recovery. Before injecting any input, it exclusively grabs both output devices so the desktop does not receive its gestures or clicks. Your real touchpad remains in use. The test requires the same input/uinput permissions as the program and remains ignored on CI, which has no uinput device.
+
+To run the same integration scenarios against an installed or older build, set `THREE_FINGER_DRAG_TEST_BIN=/absolute/path/to/linux-3-finger-drag` before the integration-test command.
 
 ## Troubleshooting
 

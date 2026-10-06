@@ -80,6 +80,10 @@ pub struct MtProxy {
     /// per the evdev protocol, everything in that window is garbage and
     /// must be discarded, with state re-read from the kernel afterward.
     dropping: bool,
+    /// A snapshot describes the kernel's current state, including events
+    /// still queued in this fd. Discard the whole queue before taking it,
+    /// so those old deltas cannot be replayed on top of the new state.
+    resync_pending: bool,
     read_buf: [sys::input_event; READ_BATCH],
 }
 
@@ -148,6 +152,7 @@ impl MtProxy {
             slot_count,
             frame: Vec::with_capacity(READ_BATCH),
             dropping: false,
+            resync_pending: false,
             read_buf: [zero_event(); READ_BATCH],
         })
     }
@@ -238,24 +243,35 @@ impl MtProxy {
         loop {
             let n = match self.real.read(&mut self.read_buf) {
                 Ok(n) => n,
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    if self.resync_pending {
+                        self.resync_pending = false;
+                        self.resync(machine, vtp)?;
+                    }
+                    return Ok(());
+                }
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                 Err(e) => return Err(e),
             };
             if n == 0 {
-                return Ok(());
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "touchpad event stream closed",
+                ));
             }
 
             for i in 0..n {
                 let raw = self.read_buf[i];
+                if self.resync_pending {
+                    continue;
+                }
                 if self.dropping {
                     // evdev protocol: after SYN_DROPPED, everything up to
                     // and including the next SYN_REPORT is unreliable --
                     // discard it, then re-read authoritative state.
                     if raw.type_ == EV_SYN && raw.code == SYN_REPORT {
                         self.dropping = false;
-                        let snapshot = self.slot_snapshot()?;
-                        let outs = machine.on_resync(&snapshot, Instant::now());
-                        self.apply(&outs, vtp)?;
+                        self.resync_pending = true;
                     }
                     continue;
                 }
@@ -276,6 +292,62 @@ impl MtProxy {
                 }
             }
         }
+    }
+
+    /// Seed startup state, or restore it after a dropped-event queue has
+    /// been drained. Include the input slot cursor and key state, since
+    /// subsequent hardware reports are deltas and may omit both.
+    pub fn resync(
+        &mut self,
+        machine: &mut GestureMachine,
+        vtp: &mut VirtualTrackpad,
+    ) -> io::Result<()> {
+        let snapshot = self.slot_snapshot()?;
+        let current_slot = self
+            .real
+            .absolute_info(AbsoluteAxis::MultitouchSlot)?
+            .value
+            .max(0) as usize;
+        let mut key_state = vec![0u8; (sys::KEY_MAX as usize + 8) / 8];
+        self.real.key_state(&mut key_state)?;
+        let keys: Vec<_> = self
+            .real
+            .key_bits()?
+            .iter()
+            .map(|key| {
+                let code = key as usize;
+                (
+                    key as u16,
+                    i32::from(key_state[code / 8] & (1 << (code % 8)) != 0),
+                )
+            })
+            .collect();
+        let outputs = machine.on_resync(&snapshot, current_slot, &keys, Instant::now());
+        self.apply(&outputs, vtp)
+    }
+
+    /// The clone takes time to appear in udev. Input accumulated during
+    /// creation is older than the initial snapshot and must not be replayed.
+    pub fn initialize(
+        &mut self,
+        machine: &mut GestureMachine,
+        vtp: &mut VirtualTrackpad,
+    ) -> io::Result<()> {
+        loop {
+            match self.real.read(&mut self.read_buf) {
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "touchpad event stream closed",
+                    ))
+                }
+                Ok(_) => {}
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(e) => return Err(e),
+            }
+        }
+        self.resync(machine, vtp)
     }
 
     /// Applies the machine's outputs to the actual devices, in order.

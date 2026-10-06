@@ -10,13 +10,11 @@
 //! Requirements & caveats:
 //!  * needs write access to /dev/uinput (input group + uaccess rule) --
 //!    the same permissions the program itself needs;
-//!  * the created devices are REAL input devices: the compositor will
-//!    act on them. The test parks the cursor against the right screen
-//!    edge first, and the drag scenario presses the left button for
-//!    ~100ms there. Run it from a session where a stray click at the
-//!    right edge of the screen is acceptable.
+//!  * the created devices are REAL input devices. The test grabs both
+//!    proxy outputs before injecting anything, isolating the compositor
+//!    while the assertions inspect their evdev streams.
 //!
-//! Because of the second point the test is #[ignore]d by default:
+//! Because it creates live input devices the test is #[ignore]d by default:
 //!
 //!     cargo test --test integration -- --ignored --test-threads=1
 
@@ -144,9 +142,71 @@ impl Reader {
             .read(true)
             .custom_flags(O_NONBLOCK)
             .open(path)?;
-        Ok(Reader {
-            dev: EvdevHandle::new(f),
-        })
+        let dev = EvdevHandle::new(f);
+        // Grab the synthetic outputs before any test input is injected. This
+        // keeps a desktop compositor from consuming the events we assert on.
+        dev.grab(true)?;
+        Ok(Reader { dev })
+    }
+
+    /// Reads the kernel's authoritative multitouch state (EVIOCGMTSLOTS).
+    fn mt_slots(&self, slot_count: usize) -> std::io::Result<Vec<(i32, i32, i32)>> {
+        let mut ids = vec![0; slot_count];
+        self.dev
+            .multi_touch_slots(AbsoluteAxis::MultitouchTrackingId, &mut ids)?;
+        let mut xs = vec![0; slot_count];
+        self.dev
+            .multi_touch_slots(AbsoluteAxis::MultitouchPositionX, &mut xs)?;
+        let mut ys = vec![0; slot_count];
+        self.dev
+            .multi_touch_slots(AbsoluteAxis::MultitouchPositionY, &mut ys)?;
+        Ok((0..slot_count)
+            .map(|slot| (ids[slot], xs[slot], ys[slot]))
+            .collect())
+    }
+
+    fn key_pressed(&self, code: u16) -> std::io::Result<bool> {
+        let mut state = vec![0u8; (sys::KEY_MAX as usize + 8) / 8];
+        self.dev.key_state(&mut state)?;
+        let code = code as usize;
+        Ok(state[code / 8] & (1 << (code % 8)) != 0)
+    }
+
+    fn wait_for_keys_clear(&self, timeout: Duration, codes: &[u16]) {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let clear = codes
+                .iter()
+                .all(|&code| !self.key_pressed(code).expect("read output key state"));
+            if clear {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "output key state remained pressed: {codes:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Polls EVIOCGMTSLOTS until the output device reaches the expected state.
+    fn wait_for_mt_slots(
+        &self,
+        timeout: Duration,
+        pred: impl Fn(&[(i32, i32, i32)]) -> bool,
+    ) -> Vec<(i32, i32, i32)> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let slots = self.mt_slots(16).expect("read output multitouch slots");
+            if pred(&slots) {
+                return slots;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "output multitouch state did not reach the expected value: {slots:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     fn drain(&self) -> Vec<(u16, u16, i32)> {
@@ -233,19 +293,30 @@ fn end_to_end() {
 
     let cfg_dir = std::env::temp_dir().join(format!("3fd-itest-{}", std::process::id()));
     std::fs::create_dir_all(cfg_dir.join("linux-3-finger-drag")).unwrap();
+    let log_path = cfg_dir.join("proxy.log");
     std::fs::write(
         cfg_dir.join("linux-3-finger-drag/3fd-config.json"),
-        r#"{ "acceleration": 1.0, "dragEndDelay": 0, "logLevel": "debug" }"#,
+        r#"{ "acceleration": 1.0, "dragEndDelay": 0, "pressGrace": 1000, "logLevel": "debug" }"#,
     )
     .unwrap();
 
     let before = list_event_nodes();
 
-    let child = Command::new(env!("CARGO_BIN_EXE_linux-3-finger-drag"))
+    let child_bin = std::env::var_os("THREE_FINGER_DRAG_TEST_BIN")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_linux-3-finger-drag")));
+    let child = Command::new(child_bin)
         .arg("--device")
         .arg(&pad.path)
         .env("XDG_CONFIG_HOME", &cfg_dir)
-        .stdout(std::process::Stdio::null())
+        .stdout(std::process::Stdio::from(
+            OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&log_path)
+                .expect("open proxy log"),
+        ))
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("spawn proxy binary");
@@ -279,6 +350,10 @@ fn end_to_end() {
     };
     let clone = Reader::open(&clone_path).expect("open clone");
     let mouse = Reader::open(&mouse_path).expect("open mouse");
+    // MtProxy waits for udev during clone creation and snapshots the input
+    // state at startup. Let that initialization finish before the first
+    // frame so the initial snapshot cannot consume test input.
+    std::thread::sleep(Duration::from_secs(1));
 
     let f = |slot: i32, id: i32, x: i32, y: i32| -> Vec<(u16, u16, i32)> {
         vec![
@@ -290,33 +365,29 @@ fn end_to_end() {
     };
 
     // -- scenario 1: single-finger motion passes through the clone --------
-    // (doubles as cursor parking: sweep hard right repeatedly so the
-    // pointer ends pinned at the right screen edge before scenario 2's
-    // button press)
-    for id in 100..112 {
-        let mut evs = f(0, id, 100, 700);
-        evs.push((EV_KEY, BTN_TOUCH, 1));
-        evs.push((EV_KEY, BTN_TOOL_FINGER, 1));
-        pad.frame(&evs);
-        for step in 1..=6 {
-            std::thread::sleep(Duration::from_millis(10));
-            pad.frame(&[
-                (EV_ABS, ABS_MT_SLOT, 0),
-                (EV_ABS, ABS_MT_POSITION_X, 100 + step * 300),
-            ]);
-        }
-        pad.frame(&[
-            (EV_ABS, ABS_MT_SLOT, 0),
-            (EV_ABS, ABS_MT_TRACKING_ID, -1),
-            (EV_KEY, BTN_TOUCH, 0),
-            (EV_KEY, BTN_TOOL_FINGER, 0),
-        ]);
-        std::thread::sleep(Duration::from_millis(30));
-    }
+    let mut evs = f(0, 100, 100, 700);
+    evs.push((EV_KEY, BTN_TOUCH, 1));
+    evs.push((EV_KEY, BTN_TOOL_FINGER, 1));
+    pad.frame(&evs);
+    std::thread::sleep(Duration::from_millis(20));
+    pad.frame(&[(EV_ABS, ABS_MT_SLOT, 0), (EV_ABS, ABS_MT_POSITION_X, 400)]);
+    pad.frame(&[
+        (EV_ABS, ABS_MT_SLOT, 0),
+        (EV_ABS, ABS_MT_TRACKING_ID, -1),
+        (EV_KEY, BTN_TOUCH, 0),
+        (EV_KEY, BTN_TOOL_FINGER, 0),
+    ]);
     let (seen, ok) = clone.wait_for(Duration::from_secs(2), |&(t, c, _)| {
         t == EV_ABS && c == ABS_MT_POSITION_X
     });
     assert!(ok, "single-finger motion never reached the clone: {seen:?}");
+    clone.wait_for_mt_slots(Duration::from_secs(2), |slots| {
+        slots.iter().all(|&(id, _, _)| id < 0)
+    });
+    clone.wait_for_keys_clear(Duration::from_secs(2), &[BTN_TOUCH, BTN_TOOL_FINGER]);
+    // wait_for above may return on the motion before the release frame is
+    // consumed; drain only after the kernel state confirms the touch ended.
+    clone.drain();
     let mouse_noise = mouse.drain();
     assert!(
         !mouse_noise.iter().any(|&(t, _, _)| t == EV_KEY),
@@ -374,7 +445,126 @@ fn end_to_end() {
         "the staggered 3-finger liftoff leaked to the compositor: {leaked:?}"
     );
 
-    // -- scenario 3: 4-finger touch passes through untouched --------------
+    // -- scenario 3: an implicit slot after a suppressed drag ------------
+    // The real pad's selected slot persists across SYN_REPORT. The drag
+    // above ended by releasing slot 2, so this new touch deliberately omits
+    // ABS_MT_SLOT and must still land in slot 2 on the clone. This exercises
+    // the real kernel slot state, rather than only inspecting emitted bytes.
+    clone.drain();
+    mouse.drain();
+    let mut evs = f(2, 900, 800, 500);
+    evs.remove(0); // hardware keeps slot 2 selected
+    evs.push((EV_KEY, BTN_TOUCH, 1));
+    evs.push((EV_KEY, BTN_TOOL_FINGER, 1));
+    pad.frame(&evs);
+    let (_, got_touch) = clone.wait_for(Duration::from_secs(2), |&(t, c, v)| {
+        t == EV_ABS && c == ABS_MT_TRACKING_ID && v == 900
+    });
+    assert!(
+        got_touch,
+        "implicit slot-2 touchdown never reached the clone"
+    );
+    let slots = clone.wait_for_mt_slots(Duration::from_secs(2), |slots| {
+        slots[2] == (900, 800, 500) && slots[0].0 < 0
+    });
+    assert_eq!(slots[2], (900, 800, 500));
+    assert!(
+        slots[0].0 < 0,
+        "implicit slot selection must not create a phantom slot-0 touch: {slots:?}"
+    );
+
+    // Release the same implicitly selected slot, then verify the clone has
+    // no active slots left at all.
+    pad.frame(&[
+        (EV_ABS, ABS_MT_TRACKING_ID, -1),
+        (EV_KEY, BTN_TOUCH, 0),
+        (EV_KEY, BTN_TOOL_FINGER, 0),
+    ]);
+    let slots = clone.wait_for_mt_slots(Duration::from_secs(2), |slots| {
+        slots.iter().all(|&(id, _, _)| id < 0)
+    });
+    assert!(
+        slots.iter().all(|&(id, _, _)| id < 0),
+        "implicit slot-2 liftoff left a phantom touch: {slots:?}"
+    );
+
+    // -- scenario 4: late-fourth handoff preserves the hardware slot ------
+    // A committed drag is handed back when slot 1 arrives as the fourth
+    // finger. The handoff dump ends at the maximum active slot (3), while
+    // the hardware remains selected on slot 1. Subsequent implicit position
+    // updates must therefore continue updating slot 1, not slot 3.
+    clone.drain();
+    mouse.drain();
+    let mut evs = Vec::new();
+    evs.extend(f(0, 200, 800, 700));
+    evs.extend(f(1, 201, 900, 700));
+    evs.extend(f(2, 202, 1000, 700));
+    evs.push((EV_KEY, BTN_TOUCH, 1));
+    evs.push((EV_KEY, BTN_TOOL_TRIPLETAP, 1));
+    pad.frame(&evs);
+    std::thread::sleep(Duration::from_millis(90));
+    // A slot-only frame makes the entry decision without moving a finger.
+    pad.frame(&[(EV_ABS, ABS_MT_SLOT, 2)]);
+    std::thread::sleep(Duration::from_millis(8));
+    pad.frame(&[(EV_ABS, ABS_MT_SLOT, 1), (EV_ABS, ABS_MT_TRACKING_ID, -1)]);
+    std::thread::sleep(Duration::from_millis(8));
+    pad.frame(&[
+        (EV_ABS, ABS_MT_SLOT, 3),
+        (EV_ABS, ABS_MT_TRACKING_ID, 203),
+        (EV_ABS, ABS_MT_POSITION_X, 1100),
+        (EV_ABS, ABS_MT_POSITION_Y, 700),
+    ]);
+    std::thread::sleep(Duration::from_millis(8));
+    // Current slot is now 1, but slot 3 is the highest active slot.
+    pad.frame(&[
+        (EV_ABS, ABS_MT_SLOT, 1),
+        (EV_ABS, ABS_MT_TRACKING_ID, 204),
+        (EV_ABS, ABS_MT_POSITION_X, 600),
+        (EV_ABS, ABS_MT_POSITION_Y, 700),
+    ]);
+    let (_, got_handoff) = clone.wait_for(Duration::from_secs(2), |&(t, c, v)| {
+        t == EV_ABS && c == ABS_MT_TRACKING_ID && v == 204
+    });
+    assert!(got_handoff, "late-fourth handoff never reached the clone");
+    let slots = clone.wait_for_mt_slots(Duration::from_secs(2), |slots| {
+        slots[1] == (204, 600, 700) && slots[3] == (203, 1100, 700)
+    });
+    assert_eq!(slots[1], (204, 600, 700));
+    assert_eq!(slots[3], (203, 1100, 700));
+
+    // Omit ABS_MT_SLOT on the next frame. It is still slot 1 on the input
+    // device, despite the clone's handoff dump having ended on slot 3.
+    pad.frame(&[(EV_ABS, ABS_MT_POSITION_X, 620)]);
+    let slots = clone.wait_for_mt_slots(Duration::from_secs(2), |slots| {
+        slots[1].1 == 620 && slots[3].1 == 1100
+    });
+    assert_eq!(slots[1].1, 620, "implicit motion must stay on slot 1");
+    assert_eq!(slots[3].1, 1100, "slot 3 must not receive slot-1 motion");
+
+    // Close the handed-off touch and verify there are no residual slots or
+    // virtual-button events before the ordinary 4-finger scenario starts.
+    let mut evs = Vec::new();
+    for slot in 0..=3 {
+        evs.push((EV_ABS, ABS_MT_SLOT, slot));
+        evs.push((EV_ABS, ABS_MT_TRACKING_ID, -1));
+    }
+    evs.push((EV_KEY, BTN_TOUCH, 0));
+    evs.push((EV_KEY, BTN_TOOL_TRIPLETAP, 0));
+    pad.frame(&evs);
+    let slots = clone.wait_for_mt_slots(Duration::from_secs(2), |slots| {
+        slots.iter().all(|&(id, _, _)| id < 0)
+    });
+    assert!(
+        slots.iter().all(|&(id, _, _)| id < 0),
+        "late-fourth handoff left phantom touches: {slots:?}"
+    );
+    let mouse_noise = mouse.drain();
+    assert!(
+        !mouse_noise.iter().any(|&(t, _, _)| t == EV_KEY),
+        "late-fourth handoff must not leave virtual-button events: {mouse_noise:?}"
+    );
+
+    // -- scenario 5: 4-finger touch passes through untouched --------------
     // (kept slow and nearly static so the compositor sees no swipe and
     // no tap; we only assert the plumbing)
     let mut evs = Vec::new();
@@ -413,6 +603,107 @@ fn end_to_end() {
         "4-finger touch must not press the mouse button: {mouse_noise:?}"
     );
 
+    // -- scenario 6: a real SYN_DROPPED queue overflow --------------------
+    // First leave a settled touch relayed to the clone. Then stop the child
+    // so its real-device queue cannot be drained, change the selected slot
+    // and key state while injecting enough frames to overflow that queue,
+    // and finish with every finger/key released. After SIGCONT the proxy
+    // must snapshot authoritative slots and keys and explicitly clean up
+    // the clone's old touch state.
+    clone.drain();
+    mouse.drain();
+    let mut evs = f(4, 700, 700, 500);
+    evs.push((EV_KEY, BTN_TOUCH, 1));
+    evs.push((EV_KEY, BTN_TOOL_FINGER, 1));
+    pad.frame(&evs);
+    let (_, got_touch) = clone.wait_for(Duration::from_secs(2), |&(t, c, v)| {
+        t == EV_ABS && c == ABS_MT_TRACKING_ID && v == 700
+    });
+    assert!(got_touch, "pre-overflow touch never reached the clone");
+    clone.wait_for_mt_slots(Duration::from_secs(2), |slots| slots[4] == (700, 700, 500));
+    clone.drain();
+
+    unsafe {
+        assert_eq!(libc::kill(child.0.id() as i32, libc::SIGSTOP), 0);
+    }
+    // Give SIGSTOP time to take effect before filling the real evdev queue.
+    std::thread::sleep(Duration::from_millis(100));
+
+    // Change both the selected slot and the active key state while the
+    // proxy is stopped. Release the relayed slot/key state near the start,
+    // then flood the queue after it so the release is in the discarded
+    // window rather than being replayed as an ordinary frame. The final
+    // state leaves slot 7 selected and every slot/key released.
+    pad.frame(&[
+        (EV_ABS, ABS_MT_SLOT, 4),
+        (EV_ABS, ABS_MT_TRACKING_ID, -1),
+        (EV_ABS, ABS_MT_SLOT, 7),
+        (EV_KEY, BTN_TOUCH, 0),
+        (EV_KEY, BTN_TOOL_FINGER, 0),
+    ]);
+    for i in 0..8_192 {
+        pad.frame(&[
+            (EV_ABS, ABS_MT_SLOT, 7),
+            (EV_ABS, ABS_MT_POSITION_X, 1200 + (i % 500)),
+            (EV_ABS, ABS_MT_POSITION_Y, 800),
+        ]);
+    }
+    pad.frame(&[(EV_ABS, ABS_MT_SLOT, 7)]);
+
+    unsafe {
+        assert_eq!(libc::kill(child.0.id() as i32, libc::SIGCONT), 0);
+    }
+    let slots = clone.wait_for_mt_slots(Duration::from_secs(5), |slots| {
+        slots.iter().all(|&(id, _, _)| id < 0)
+    });
+    assert!(
+        slots.iter().all(|&(id, _, _)| id < 0),
+        "SYN_DROPPED recovery left phantom touches: {slots:?}"
+    );
+    clone.wait_for_keys_clear(
+        Duration::from_secs(5),
+        &[
+            BTN_TOUCH,
+            BTN_TOOL_FINGER,
+            BTN_TOOL_TRIPLETAP,
+            BTN_TOOL_QUADTAP,
+        ],
+    );
+    mouse.wait_for_keys_clear(Duration::from_secs(5), &[BTN_LEFT]);
+
+    // The authoritative snapshot also restores the input device's selected
+    // slot. Verify that a post-recovery frame omitting ABS_MT_SLOT follows
+    // slot 7, rather than the machine's pre-overflow cursor.
+    let mut evs = f(7, 800, 1500, 900);
+    evs.remove(0);
+    evs.push((EV_KEY, BTN_TOUCH, 1));
+    evs.push((EV_KEY, BTN_TOOL_FINGER, 1));
+    pad.frame(&evs);
+    let (_, got_touch) = clone.wait_for(Duration::from_secs(5), |&(t, c, v)| {
+        t == EV_ABS && c == ABS_MT_TRACKING_ID && v == 800
+    });
+    assert!(
+        got_touch,
+        "post-resync implicit touchdown never reached clone"
+    );
+    let slots = clone.wait_for_mt_slots(Duration::from_secs(5), |slots| {
+        slots[7] == (800, 1500, 900) && slots[4].0 < 0
+    });
+    assert_eq!(slots[7], (800, 1500, 900));
+    assert!(
+        slots[4].0 < 0,
+        "post-resync touch used stale slot 4: {slots:?}"
+    );
+    pad.frame(&[
+        (EV_ABS, ABS_MT_TRACKING_ID, -1),
+        (EV_KEY, BTN_TOUCH, 0),
+        (EV_KEY, BTN_TOOL_FINGER, 0),
+    ]);
+    clone.wait_for_mt_slots(Duration::from_secs(5), |slots| {
+        slots.iter().all(|&(id, _, _)| id < 0)
+    });
+    clone.wait_for_keys_clear(Duration::from_secs(5), &[BTN_TOUCH, BTN_TOOL_FINGER]);
+
     // -- shutdown ----------------------------------------------------------
     // SIGTERM and expect a clean exit (virtual devices destroyed)
     unsafe {
@@ -427,6 +718,12 @@ fn end_to_end() {
         std::thread::sleep(Duration::from_millis(50));
     };
     assert!(status.success(), "proxy exited unclean: {status:?}");
+
+    let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+    assert!(
+        log.contains("Kernel reported dropped events"),
+        "overflow scenario did not observe a real SYN_DROPPED in proxy output: {log}"
+    );
 
     drop(pad);
     let _ = std::fs::remove_dir_all(&cfg_dir);

@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Preserve the real device's selected multitouch slot when forwarding
+  deltas without `ABS_MT_SLOT`, including after suppressed drags,
+  late-fourth-finger handoffs, and synthesized recovery frames. This
+  prevents coordinates and releases from being assigned to other fingers.
+- Recover `BTN_TOUCH`, tool-count bits, physical buttons, and the selected
+  input slot after `SYN_DROPPED`. Release replaced tracking IDs before
+  introducing their replacements, preserve unchanged contact IDs without
+  redundant declarations, and rebuild undecided touches from the snapshot
+  instead of replaying incomplete buffered history.
+- Drain queued events before taking a recovery or startup snapshot so old
+  deltas cannot overwrite the recovered state. Initialize from the device
+  state rather than assuming that all fingers are up and slot 0 is selected.
+
+### Tests
+
+- Exercise implicit slot selections, tracking IDs, coordinates, and key
+  state in deterministic regressions and randomized input sequences.
+- Exclusively grab integration-test outputs before injecting input so the
+  test's fake gestures do not reach the desktop.
+
 ## 2.0.0 - 2026-07-06
 
 Architecture rewrite: the program is now an evdev multitouch proxy
@@ -234,4 +258,3 @@ state machine and an event-driven runtime. Fixes #18. Courtesy of [Juao Driessen
 ## Added
 
 - Add support for `XDG_HOME` (contributed by @Diegovsky)
-
