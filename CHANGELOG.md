@@ -10,8 +10,9 @@
   prevents coordinates and releases from being assigned to other fingers.
 - Recover `BTN_TOUCH`, tool-count bits, physical buttons, and the selected
   input slot after `SYN_DROPPED`. Release replaced tracking IDs before
-  introducing their replacements, and rebuild undecided touches from the
-  snapshot instead of replaying incomplete buffered history.
+  introducing their replacements, preserve unchanged contact IDs without
+  redundant declarations, and rebuild undecided touches from the snapshot
+  instead of replaying incomplete buffered history.
 - Drain queued events before taking a recovery or startup snapshot so old
   deltas cannot overwrite the recovered state. Initialize from the device
   state rather than assuming that all fingers are up and slot 0 is selected.

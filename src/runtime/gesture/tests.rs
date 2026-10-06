@@ -792,6 +792,24 @@ fn regression_resync_releases_replaced_tracking_ids_first() {
 }
 
 #[test]
+fn regression_resync_preserves_unchanged_contact_identity() {
+    let mut sim = Sim::new();
+    sim.frame(&down(0, 1, 100, 100));
+    sim.tick(15);
+    let mut snapshot = vec![(-1, 0, 0); 16];
+    snapshot[0] = (1, 110, 100);
+    let outputs = sim.m.on_resync(&snapshot, 0, &[], sim.now);
+    let events = synth_events(&outputs);
+    assert!(
+        !events
+            .iter()
+            .any(|ev| ev.type_ == EV_ABS && ev.code == ABS_MT_TRACKING_ID),
+        "an unchanged contact must not be released or reintroduced: {events:?}"
+    );
+    assert!(events.contains(&Ev::abs(ABS_MT_POSITION_X, 110)));
+}
+
+#[test]
 fn regression_resync_restores_input_slot_selected_during_drop() {
     let mut sim = Sim::new();
     let mut clone = SlotReader::new();

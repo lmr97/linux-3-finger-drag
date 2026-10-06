@@ -775,15 +775,18 @@ impl GestureMachine {
         self.drag_last_pos = Some((x, y));
     }
 
-    /// SLOT/TRACKING_ID/X/Y events asserting the current state of every
-    /// active slot (used to correct downstream state after a resync).
+    /// Assert the current state of every active slot. Introduce a tracking
+    /// ID only if that contact is not already known to the clone, preserving
+    /// existing contacts across resync without redundant touchdowns.
     fn active_slot_dump(&self) -> Vec<Ev> {
         let mut dump = Vec::new();
         for slot in 0..self.slot_count {
             let s = self.slots[slot];
             if s.tracking_id >= 0 {
                 dump.push(Ev::abs(ABS_MT_SLOT, slot as i32));
-                dump.push(Ev::abs(ABS_MT_TRACKING_ID, s.tracking_id));
+                if self.relayed_ids[slot] != s.tracking_id {
+                    dump.push(Ev::abs(ABS_MT_TRACKING_ID, s.tracking_id));
+                }
                 dump.push(Ev::abs(ABS_MT_POSITION_X, s.x));
                 dump.push(Ev::abs(ABS_MT_POSITION_Y, s.y));
             }
